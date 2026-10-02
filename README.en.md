@@ -25,9 +25,24 @@ The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` vol
 - Auto-detects the HUAWEI display (manufacturer `HWV` / name match); pin any DDC display or CoreAudio device (Bluetooth, built-in speakers, …) from the device list
 - "Follow system default output" mode: controls the default output directly, or maps it to the same-named display's speakers over DDC when the default output has no volume control (typical DP monitor case)
 - **Take over the keyboard volume keys** (optional, requires Accessibility permission): intercept F1/F2/F3 and step the target volume by 5% — making the Mac's local volume keys actually work on the monitor
+- **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection
 - Reacts to display hot-plug and default-output changes; falls back to follow-default when a pinned device disappears
 - Launch at login (SMAppService)
 - No microphone or other intrusive permissions
+
+## Smart fan management
+
+macOS's stock fan policy is conservative. This app reads temperatures and fan speeds straight from the SMC and offers three modes:
+
+- **System auto**: leave everything to macOS (default)
+- **Smart curve**: drive fans from the hottest system sensor with three presets — Quiet (ramp from 62°C) / Balanced (55°C) / Performance (48°C); smooth slew-rate limiting (max 800 RPM per step) and hysteresis
+- **Manual**: per-fan RPM sliders
+
+Safety design:
+
+- Writing fan-control keys (`F0Md`/`F0Tg`) requires root. The app embeds a tiny privileged helper, `gt-fanctl`; enabling control shows **one admin password prompt**. The helper accepts only whitelisted fan commands over a 0600 local socket
+- RPM is always clamped to the SMC-reported [min, max] range; ≥90°C forces full speed in smart mode, ≥95°C forces full speed in any non-auto mode
+- Quitting the app restores system auto; a dropped helper connection restores system auto immediately; the helper also clears any stale forced state at startup
 
 ## Build & Run
 
@@ -74,10 +89,14 @@ swiftc -O -swift-version 5 Sources/AudioController.swift Sources/DDCController.s
 Sources/AudioController.swift    # CoreAudio: device enumeration, volume/mute read-write, property listeners
 Sources/DDCController.swift      # DDC/CI: display discovery, IOAVService I2C, VCP 0x62/0x8D
 Sources/VolumeManager.swift      # Unified target model: follow-default / pinned audio device / pinned DDC display
+Sources/SMCLite.swift            # SMC low level: key read-write, fan speeds, temperature discovery (shared with helper)
+Sources/FanController.swift      # Smart fan management: temperature curve, modes, helper communication
+Sources/FanHelperMain.swift      # gt-fanctl privileged helper (root): whitelisted fan commands, auto-restore on disconnect
 Sources/MediaKeyTap.swift        # CGEventTap media-key takeover (requires Accessibility)
-Sources/MenuBarController.swift  # Menu bar UI: slider, device list, status icon, launch-at-login
+Sources/MenuBarController.swift  # Menu bar UI: slider, device list, fan section, status icon, launch-at-login
 Sources/main.swift               # Entry point
-tools/main.swift                 # CLI self-check tool
+tools/main.swift                 # CLI self-check tool (volume path)
+tools/smc_probe.swift            # CLI self-check tool (SMC fan/temperature keys)
 Info.plist / build.sh / build-dmg.sh
 ```
 
@@ -86,6 +105,8 @@ Info.plist / build.sh / build-dmg.sh
 - **Slider moves but no sound**: check the pinned target in the menu, and that the monitor's own volume/output source isn't at zero.
 - **Volume keys do nothing**: enable "Take over keyboard volume keys" and grant Accessibility; the system OSD is suppressed while the tap is active — the menu bar icon is the feedback.
 - **Need a second opinion**: the protocol matches [waydabber/m1ddc](https://github.com/waydabber/m1ddc); `m1ddc display 1 get volume` cross-checks values.
+- **Fan control did not prompt / auth was cancelled**: the notice at the bottom of the menu explains it — click Smart or Manual again to retry. System auto mode never needs privileges.
+- **Fans stuck after a crash**: reopen the app — a "restore auto" entry appears in the menu (the helper also clears stale forced state on startup).
 
 ## License
 

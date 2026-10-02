@@ -5,6 +5,7 @@ import ServiceManagement
 final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     private let manager = VolumeManager.shared
+    private let fan = FanController.shared
     private let mediaKeyTap = MediaKeyTap.shared
 
     private var statusItem: NSStatusItem?
@@ -14,6 +15,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     private var slider: NSSlider?
     private var percentLabel: NSTextField?
     private var muteItem: NSMenuItem?
+    private var fanTempItem: NSMenuItem?
+    private var fanRPMItem: NSMenuItem?
 
     private var cachedMuted: Bool?
 
@@ -28,6 +31,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
             self?.refreshVolumeUI(vol: nil, muted: nil)
         }
         manager.install()
+
+        fan.onUpdate = { [weak self] in self?.refreshFanUI() }
+        fan.start()
 
         let menu = NSMenu()
         menu.delegate = self
@@ -79,6 +85,111 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     private func percentText(_ volume: Float) -> String {
         "\(Int((volume * 100).rounded()))%"
+    }
+
+    // MARK: - 风扇区
+
+    private func refreshFanUI() {
+        guard menuIsOpen else { return }
+        fanTempItem?.title = fanTempLine()
+        fanRPMItem?.title = fanRPMLine()
+    }
+
+    private func fanTempLine() -> String {
+        guard fan.available else { return "风扇 · SMC 不可用" }
+        if fan.hottestTemp > 0 {
+            return String(format: "风扇 · 最高温度 %.1f°C (%@)", fan.hottestTemp, fan.hottestKey)
+        }
+        return "风扇 · 温度读取中…"
+    }
+
+    private func fanRPMLine() -> String {
+        guard !fan.fans.isEmpty else { return "未发现风扇" }
+        return fan.fans.map { String(format: "风扇%d %.0f RPM", $0.index + 1, $0.current) }.joined(separator: " · ")
+    }
+
+    private func buildFanSection(_ menu: NSMenu) {
+        guard fan.available else { return }
+        menu.addItem(.separator())
+
+        let temp = NSMenuItem(title: fanTempLine(), action: nil, keyEquivalent: "")
+        temp.isEnabled = false
+        menu.addItem(temp)
+        fanTempItem = temp
+
+        let rpm = NSMenuItem(title: fanRPMLine(), action: nil, keyEquivalent: "")
+        rpm.isEnabled = false
+        menu.addItem(rpm)
+        fanRPMItem = rpm
+
+        if fan.needsRecovery {
+            let rec = NSMenuItem(title: "⚠ 检测到手动状态残留,点击恢复自动", action: #selector(fanRecover(_:)), keyEquivalent: "")
+            rec.target = self
+            menu.addItem(rec)
+        }
+
+        let modes: [(String, FanController.Mode)] = [("系统自动", .systemAuto), ("智能温控", .smart), ("手动调速", .manual)]
+        for (title, m) in modes {
+            let item = NSMenuItem(title: title, action: #selector(setFanMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = NSNumber(value: m.rawValue)
+            item.state = fan.mode == m ? .on : .off
+            item.indentationLevel = 1
+            menu.addItem(item)
+        }
+
+        if fan.mode == .smart {
+            for preset in FanController.presets {
+                let item = NSMenuItem(title: preset.key, action: #selector(setFanPreset(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = preset.key
+                item.state = fan.presetKey == preset.key ? .on : .off
+                item.indentationLevel = 2
+                menu.addItem(item)
+            }
+        }
+
+        if fan.mode == .manual {
+            for fanInfo in fan.fans {
+                let item = NSMenuItem()
+                item.view = makeFanSliderRow(index: fanInfo.index)
+                menu.addItem(item)
+            }
+        }
+
+        if let notice = fan.notice {
+            let n = NSMenuItem(title: "· \(notice)", action: nil, keyEquivalent: "")
+            n.isEnabled = false
+            menu.addItem(n)
+        }
+    }
+
+    private func makeFanSliderRow(index: Int) -> NSView {
+        let width: CGFloat = 300
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 30))
+
+        let label = NSTextField(labelWithString: "风扇\(index + 1)")
+        label.frame = NSRect(x: 14, y: 8, width: 54, height: 16)
+        label.font = NSFont.systemFont(ofSize: 11)
+        container.addSubview(label)
+
+        let pct = index < fan.manualPct.count ? fan.manualPct[index] : 0
+        let slider = NSSlider(value: Double(pct), minValue: 0, maxValue: 1,
+                              target: self, action: #selector(fanSliderChanged(_:)))
+        slider.frame = NSRect(x: 72, y: 5, width: width - 134, height: 20)
+        slider.isContinuous = true
+        slider.identifier = NSUserInterfaceItemIdentifier(String(index))
+        container.addSubview(slider)
+
+        let rpm = index < fan.fans.count ? Int(fan.fans[index].current) : 0
+        let valueLabel = NSTextField(labelWithString: "\(Int(pct * 100))% · \(rpm)RPM")
+        valueLabel.frame = NSRect(x: width - 92, y: 8, width: 82, height: 16)
+        valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        valueLabel.alignment = .right
+        valueLabel.identifier = NSUserInterfaceItemIdentifier("fanPct\(index)")
+        container.addSubview(valueLabel)
+
+        return container
     }
 
     private func modeText() -> String {
@@ -169,6 +280,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
                 menu.addItem(item)
             }
         }
+
+        buildFanSection(menu)
 
         menu.addItem(.separator())
 
@@ -321,6 +434,37 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
             NSSound.beep()
         }
         rebuildMenu()
+    }
+
+    // MARK: - 风扇动作
+
+    @objc private func setFanMode(_ sender: NSMenuItem) {
+        guard let number = sender.representedObject as? NSNumber,
+              let m = FanController.Mode(rawValue: number.intValue) else { return }
+        fan.setMode(m)
+        rebuildMenu()
+    }
+
+    @objc private func setFanPreset(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        fan.setPreset(key)
+        rebuildMenu()
+    }
+
+    @objc private func fanRecover(_ sender: NSMenuItem) {
+        _ = fan.recoverAuto()
+        rebuildMenu()
+    }
+
+    @objc private func fanSliderChanged(_ sender: NSSlider) {
+        guard let idString = sender.identifier?.rawValue, let index = Int(idString) else { return }
+        fan.setManual(index, sender.doubleValue)
+        let rpm = index < fan.fans.count ? Int(fan.fans[index].current) : 0
+        if let container = sender.superview,
+           let label = container.subviews.compactMap({ $0 as? NSTextField })
+               .first(where: { $0.identifier?.rawValue == "fanPct\(index)" }) {
+            label.stringValue = "\(Int(sender.doubleValue * 100))% · \(rpm)RPM"
+        }
     }
 
     // MARK: - 键盘音量键(MediaKeyHandling)

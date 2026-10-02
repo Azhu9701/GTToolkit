@@ -25,9 +25,24 @@
 - 自动识别华为显示器(厂商 HWV / 名称匹配),也可在设备列表锁定任意 DDC 显示器或 CoreAudio 设备(蓝牙、内建扬声器等)
 - 「跟随系统默认输出」:默认输出是普通设备时直接控制它;是无音量控制的 DP 显示器时自动映射到同名显示器喇叭
 - **接管键盘音量键**(可选,需辅助功能权限):拦截 F1/F2/F3 音量键,±5% 步进控制显示器音量——把 mac 本地音量键真正"打通"到显示器
+- **智能风扇管理**(可选,首次开启需管理员授权):温度曲线调速、手动 RPM 调速、高温保护
 - 显示器插拔、默认输出切换实时响应;锁定的设备被拔出时自动回退
 - 登录时自动启动(SMAppService)
 - 无需麦克风等其他权限
+
+## 智能风扇管理
+
+macOS 自带的风扇策略偏保守,本 App 通过 SMC 直读温度与转速,提供三种模式:
+
+- **系统自动**:完全交给 macOS(默认)
+- **智能温控**:按「全系统最高温」驱动自定义曲线,三档预设——安静(62°C 起转)/ 均衡(55°C 起转)/ 性能(48°C 起转),升速平滑(每步限速 800 RPM)、带迟滞
+- **手动调速**:按风扇滑杆直接设定转速
+
+安全设计:
+
+- 风扇控制键(F0Md/F0Tg)写入需要 root,App 内嵌微型特权助手 `gt-fanctl`,**首次开启时弹一次管理员密码**;助手只接受白名单的风扇命令,本地 socket 权限 0600
+- 转速永远钳制在 SMC 上报的 [最小, 最大] 区间;温度 ≥90°C 智能模式强制满速,≥95°C 任何非自动模式强制满速
+- App 退出自动恢复系统自动;助手连接断开立即恢复系统自动;助手启动时清理上次异常残留的强制状态
 
 ## 构建与运行
 
@@ -74,10 +89,14 @@ swiftc -O -swift-version 5 Sources/AudioController.swift Sources/DDCController.s
 Sources/AudioController.swift    # CoreAudio 封装:设备枚举、音量/静音读写、属性监听
 Sources/DDCController.swift      # DDC/CI 封装:显示器发现、IOAVService I2C、VCP 0x62/0x8D
 Sources/VolumeManager.swift      # 统一目标模型:跟随默认输出 / 锁定音频设备 / 锁定 DDC 显示器
+Sources/SMCLite.swift            # SMC 底层:键读写、风扇转速、温度键发现(App 与助手共用)
+Sources/FanController.swift      # 智能风扇管理:温度曲线、模式切换、特权助手通信
+Sources/FanHelperMain.swift      # gt-fanctl 特权助手(root):白名单风扇命令、断连自动恢复
 Sources/MediaKeyTap.swift        # CGEventTap 键盘音量键接管(需辅助功能权限)
-Sources/MenuBarController.swift  # 菜单栏 UI:滑杆、设备列表、状态图标、开机自启
+Sources/MenuBarController.swift  # 菜单栏 UI:滑杆、设备列表、风扇区、状态图标、开机自启
 Sources/main.swift               # 入口
-tools/main.swift                 # CLI 自检工具
+tools/main.swift                 # CLI 自检工具(音量通路)
+tools/smc_probe.swift            # CLI 自检工具(SMC 风扇/温度键)
 Info.plist / build.sh / build-dmg.sh
 ```
 
@@ -86,6 +105,8 @@ Info.plist / build.sh / build-dmg.sh
 - **滑杆拖动没声音**:确认菜单里当前目标是目标显示器(勾选状态);显示器端物理音量是否被调为 0。
 - **键盘音量键无反应**:需开启「接管键盘音量键」并授予辅助功能权限;开启后系统 OSD 不再弹出,以菜单栏图标为反馈。
 - **改了音量但显示器没响**:DP 音量走显示器功放,检查显示器当前输出源与喇叭开关。
+- **开启风扇控制没弹密码 / 取消了授权**:菜单底部会显示提示,重新点「智能温控」或「手动调速」即可再次授权;授权只在开启时需要,系统自动模式完全无需权限。
+- **异常退出后风扇停在固定转速**:重新打开 App,菜单里会出现「恢复自动」入口,点击即可(助手启动时也会主动清理残留)。
 - **m1ddc 参考**:本实现与 [waydabber/m1ddc](https://github.com/waydabber/m1ddc) 协议一致,可用 `m1ddc display 1 get volume` 交叉验证。
 
 ## 许可证
