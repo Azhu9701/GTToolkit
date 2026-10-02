@@ -1,0 +1,8 @@
+# 构建产物
+GTVolume.app
+build/
+*.o
+.objects/
+
+# 系统文件
+.DS_Store
