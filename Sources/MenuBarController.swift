@@ -304,6 +304,11 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         fix.target = self
         menu.addItem(fix)
 
+        let auto = NSMenuItem(title: fan.autoRepairInstalled ? "音频自动修复:已启用 ✓" : "音频自动修复:未启用",
+                              action: #selector(toggleAutoRepair(_:)), keyEquivalent: "")
+        auto.target = self
+        menu.addItem(auto)
+
         let quit = NSMenuItem(title: "退出 GT 音量助手", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
     }
@@ -462,6 +467,11 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     @objc private func resetAudioService(_ sender: NSMenuItem) {
         fan.resetCoreAudio()
+        rebuildMenu()
+    }
+
+    @objc private func toggleAutoRepair(_ sender: NSMenuItem) {
+        fan.setAutoRepair(!fan.autoRepairInstalled)
         rebuildMenu()
     }
 

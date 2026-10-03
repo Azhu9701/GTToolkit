@@ -1,10 +1,19 @@
 import Foundation
 import IOKit
 import Darwin
+import CoreAudio
+import CoreGraphics
+import AudioToolbox
 
-// gt-fanctl:GT 音量助手的特权风扇控制助手(root)。
-// 由 App 通过管理员授权拉起,通过本地 UNIX socket 接收白名单命令;
-// 连接断开时自动把所有风扇恢复为系统自动模式,启动时同样清理残留强制状态。
+// gt-fanctl:GT 音量助手的特权助手(root)。
+//
+// 三种模式:
+//   daemon <socket> <uid>   常驻守护(launchd 拉起):白名单风扇命令 + 唤醒后音频假死自动探测修复
+//   install <uid>           安装为 LaunchDaemon(自拷贝到 /Library/PrivilegedHelperTools)
+//   uninstall               停止并移除守护
+//
+// 安全:socket 0600 属主为用户;命令全部白名单;转速钳制在 SMC 上报区间;
+//      风扇强制状态只在"本连接真的动过风扇"时才在断开时恢复系统自动。
 
 @main
 struct GTFanHelper {
@@ -12,24 +21,124 @@ struct GTFanHelper {
     static var fanCount = 0
     static var fanMin: [Double] = []
     static var fanMax: [Double] = []
+    static var forcedInConnection = false
+    static var repairCount = 0
+    static var lastProbeTime: TimeInterval = 0
+
+    static let helperInstallPath = "/Library/PrivilegedHelperTools/com.sounds.gtfanctl"
+    static let plistInstallPath = "/Library/LaunchDaemons/com.sounds.gtfanctl.plist"
+    static let serviceLabel = "com.sounds.gtfanctl"
 
     static func main() {
         let args = CommandLine.arguments
-        guard args.count >= 4, args[1] == "daemon" else {
-            fputs("usage: gt-fanctl daemon <socket-path> <uid>\n", stderr)
-            exit(2)
+        guard args.count >= 2 else { usage(); exit(2) }
+        switch args[1] {
+        case "daemon":
+            guard args.count >= 4 else { usage(); exit(2) }
+            daemonRun(socketPath: args[2], uidArg: args[3])
+        case "install":
+            install(uidArg: args.count > 2 ? args[2] : "")
+        case "uninstall":
+            uninstall()
+        default:
+            usage(); exit(2)
         }
+    }
+
+    static func usage() {
+        fputs("usage: gt-fanctl daemon <socket-path> <uid> | install <uid> | uninstall\n", stderr)
+    }
+
+    // MARK: - 安装 / 卸载(root)
+
+    static func install(uidArg: String) {
+        guard getuid() == 0 else { fputs("install 需要 root\n", stderr); exit(1) }
+        let uid = uidArg.isEmpty ? String(getuid()) : uidArg
+        let fm = FileManager.default
+        let selfPath = CommandLine.arguments[0]
+        let socketPath = "/tmp/gt-fanctl-\(uid).sock"
+
+        do {
+            try fm.createDirectory(atPath: (helperInstallPath as NSString).deletingLastPathComponent,
+                                   withIntermediateDirectories: true)
+            if fm.fileExists(atPath: helperInstallPath) { try fm.removeItem(atPath: helperInstallPath) }
+            try fm.copyItem(atPath: selfPath, toPath: helperInstallPath)
+            chmod(helperInstallPath, 0o755)
+            chown(helperInstallPath, 0, 0)
+
+            let plist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>Label</key>
+                <string>\(serviceLabel)</string>
+                <key>ProgramArguments</key>
+                <array>
+                    <string>\(helperInstallPath)</string>
+                    <string>daemon</string>
+                    <string>\(socketPath)</string>
+                    <string>\(uid)</string>
+                </array>
+                <key>RunAtLoad</key>
+                <true/>
+                <key>KeepAlive</key>
+                <true/>
+                <key>ProcessType</key>
+                <string>Background</string>
+            </dict>
+            </plist>
+            """
+            try plist.write(toFile: plistInstallPath, atomically: true, encoding: .utf8)
+            chmod(plistInstallPath, 0o644)
+            chown(plistInstallPath, 0, 0)
+        } catch {
+            fputs("安装失败: \(error)\n", stderr)
+            exit(1)
+        }
+
+        _ = runCmd("/bin/launchctl", ["bootout", "system/\(serviceLabel)"])
+        if runCmd("/bin/launchctl", ["bootstrap", "system", plistInstallPath]) != 0 {
+            _ = runCmd("/bin/launchctl", ["load", "-w", plistInstallPath])
+        }
+        print("已安装并启动: \(serviceLabel)")
+    }
+
+    static func uninstall() {
+        guard getuid() == 0 else { fputs("uninstall 需要 root\n", stderr); exit(1) }
+        if smc.openSMC() { restoreAuto() }
+        _ = runCmd("/bin/launchctl", ["bootout", "system/\(serviceLabel)"])
+        try? FileManager.default.removeItem(atPath: plistInstallPath)
+        try? FileManager.default.removeItem(atPath: helperInstallPath)
+        print("已卸载")
+    }
+
+    static func runCmd(_ path: String, _ args: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return -1 }
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
+
+    // MARK: - 常驻守护
+
+    static func daemonRun(socketPath: String, uidArg: String) {
+        let uid = uid_t(uidArg) ?? 0
         signal(SIGHUP, SIG_IGN)
         signal(SIGINT, SIG_IGN)
-
-        let socketPath = args[2]
-        let uid = uid_t(args[3]) ?? 0
+        signal(SIGTERM, { _ in
+            GTFanHelper.restoreAuto()
+            GTFanHelper.forceExit()
+        })
 
         guard smc.openSMC() else {
             fputs("打开 AppleSMC 失败\n", stderr)
             exit(1)
         }
-
         fanCount = min(Int(smc.readUInt8("FNum") ?? 0), 8)
         for i in 0..<fanCount {
             fanMin.append(smc.readRPM("F\(i)Mn") ?? 0)
@@ -39,7 +148,17 @@ struct GTFanHelper {
             fputs("未发现风扇\n", stderr)
             exit(1)
         }
-        restoreAuto()   // 清理上次异常退出残留的强制状态
+        restoreAuto()   // 清理残留强制状态
+
+        // 显示器重配置(睡眠/唤醒都会触发)后自动探测音频假死;探测内部会跳过睡眠状态
+        CGDisplayRegisterReconfigurationCallback({ _, _, _ in
+            let now = Date().timeIntervalSince1970
+            guard now - GTFanHelper.lastProbeTime > 45 else { return }
+            GTFanHelper.lastProbeTime = now
+            DispatchQueue.global().asyncAfter(deadline: .now() + 4) {
+                GTFanHelper.probeAndRepair()
+            }
+        }, nil)
 
         unlink(socketPath)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -66,12 +185,18 @@ struct GTFanHelper {
         chown(socketPath, uid, gid_t(0xFFFFFFFF))
         listen(fd, 1)
 
+        // 启动后先探测一次
+        DispatchQueue.global().asyncAfter(deadline: .now() + 6) { probeAndRepair() }
+
         while true {
             let client = accept(fd, nil, nil)
             guard client >= 0 else { break }
+            forcedInConnection = false
             handle(client)
             close(client)
-            restoreAuto()   // 连接断开 → 恢复系统自动(安全兜底)
+            if forcedInConnection {
+                restoreAuto()   // 本连接动过风扇 → 断开恢复系统自动(安全兜底)
+            }
         }
         restoreAuto()
     }
@@ -107,7 +232,7 @@ struct GTFanHelper {
         case "PING":
             return "OK"
         case "STATE":
-            var fields = ["OK"]
+            var fields = ["OK", "REP=\(repairCount)"]
             for i in 0..<fanCount {
                 fields.append("F\(i)Ac=\(Int(smc.readRPM("F\(i)Ac") ?? -1))")
                 fields.append("F\(i)Md=\(smc.readUInt8("F\(i)Md") ?? 255)")
@@ -116,27 +241,76 @@ struct GTFanHelper {
         case "ALLAUTO":
             restoreAuto()
             return "OK"
-        case "AUDIO-RESET":
-            // 重启系统音频服务,修复 DP 音频假死(播放报 AudioQueueStart failed)
-            return audioReset() ? "OK" : "ERR reset"
         case "MODE":
             guard parts.count == 3, let i = Int(parts[1]), i < fanCount,
                   let m = UInt8(parts[2]), m <= 1 else { return "ERR args" }
-            return smc.writeUInt8("F\(i)Md", m) ? "OK" : "ERR write"
+            let ok = smc.writeUInt8("F\(i)Md", m)
+            if ok, m == 1 { forcedInConnection = true }
+            return ok ? "OK" : "ERR write"
         case "RPM":
             guard parts.count == 3, let i = Int(parts[1]), i < fanCount,
                   let rpm = Double(parts[2]) else { return "ERR args" }
             let clamped = min(max(rpm, fanMin[i]), fanMax[i])
             return smc.writeRPM("F\(i)Tg", clamped) ? "OK" : "ERR write"
+        case "AUDIO-RESET":
+            // 重启系统音频服务,修复 DP 音频假死(播放报 AudioQueueStart failed)
+            return audioReset() ? "OK" : "ERR reset"
         default:
             return "ERR unknown"
         }
     }
 
-    static func restoreAuto() {
-        let count = min(Int(smc.readUInt8("FNum") ?? 0), 8)
-        for i in 0..<count {
-            _ = smc.writeUInt8("F\(i)Md", 0)
+    // MARK: - 音频假死探测与自动修复
+
+    /// 在默认输出上静默启动一个探测流;假死设备会启动失败。无默认输出视为健康。
+    static func audioHealthy() -> Bool {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr,
+              deviceID != 0 else { return true }
+
+        var format = AudioStreamBasicDescription(
+            mSampleRate: 48000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 8,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 8,
+            mChannelsPerFrame: 2,
+            mBitsPerChannel: 32,
+            mReserved: 0)
+        var queue: AudioQueueRef?
+        let newResult = AudioQueueNewOutput(&format, { _, _, _ in }, nil, nil, nil, 0, &queue)
+        guard newResult == noErr, let queue else { return false }
+        defer { AudioQueueDispose(queue, true) }
+
+        var buffer: AudioQueueBufferRef?
+        guard AudioQueueAllocateBuffer(queue, 8192, &buffer) == noErr, let buf = buffer else { return false }
+        buf.pointee.mAudioDataByteSize = UInt32(8192)
+        memset(buf.pointee.mAudioData, 0, 8192)
+        guard AudioQueueEnqueueBuffer(queue, buf, 0, nil) == noErr else { return false }
+
+        let startResult = AudioQueueStart(queue, nil)
+        if startResult == noErr {
+            usleep(30_000)
+            AudioQueueStop(queue, true)
+        }
+        return startResult == noErr
+    }
+
+    /// 探测失败 → 重启 coreaudiod → 复测,最多 3 次。显示器睡眠中不做探测(等唤醒事件)。
+    static func probeAndRepair() {
+        guard CGDisplayIsAsleep(CGMainDisplayID()) == 0 else { return }
+        guard !audioHealthy() else { return }
+        for _ in 0..<3 {
+            repairCount += 1
+            _ = audioReset()
+            usleep(3_000_000)
+            if audioHealthy() { return }
         }
     }
 
@@ -157,5 +331,18 @@ struct GTFanHelper {
         kill.standardOutput = FileHandle.nullDevice
         kill.standardError = FileHandle.nullDevice
         return ((try? kill.run()) != nil) && { kill.waitUntilExit(); return kill.terminationStatus == 0 }()
+    }
+
+    // MARK: - 风扇
+
+    static func restoreAuto() {
+        let count = min(Int(smc.readUInt8("FNum") ?? 0), 8)
+        for i in 0..<count {
+            _ = smc.writeUInt8("F\(i)Md", 0)
+        }
+    }
+
+    static func forceExit() {
+        exit(0)
     }
 }

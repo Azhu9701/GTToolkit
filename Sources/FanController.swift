@@ -63,6 +63,11 @@ final class FanController: NSObject {
             .appendingPathComponent("gt-fanctl").path ?? "gt-fanctl"
     }
 
+    /// 常驻守护(launchd)是否已安装——安装后唤醒自动修复生效,且风扇控制不再弹授权。
+    var autoRepairInstalled: Bool {
+        FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.sounds.gtfanctl.plist")
+    }
+
     // MARK: - 生命周期
 
     func start() {
@@ -72,7 +77,27 @@ final class FanController: NSObject {
             guard let self else { return }
             self.tempKeys = self.smc.discoverTemperatureKeys()
             self.refreshFans()
-            if self.fans.contains(where: { $0.forced }) { self.needsRecovery = true }
+
+            // 恢复上次的风扇模式(常驻守护在位时静默完成,否则提示手动开启)
+            let savedMode = Mode(rawValue: UserDefaults.standard.integer(forKey: "gtFanMode")) ?? .systemAuto
+            if savedMode != .systemAuto {
+                if self.autoRepairInstalled, self.ensureHelper() {
+                    self.mode = savedMode
+                    self.presetKey = UserDefaults.standard.string(forKey: "gtFanPreset") ?? self.presetKey
+                    if let pct = UserDefaults.standard.array(forKey: "gtFanManualPct") as? [Double],
+                       pct.count == self.fans.count {
+                        self.manualPct = pct
+                    }
+                    for f in self.fans { _ = self.send("MODE \(f.index) 1") }
+                    self.lastTargetRPM = self.fans.map { $0.current }
+                    if self.mode == .smart { self.applySmart() }
+                } else {
+                    self.notice = "上次的风扇模式未自动恢复,请重新开启"
+                }
+            } else if self.fans.contains(where: { $0.forced }) {
+                self.needsRecovery = true
+            }
+
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.timer == nil else { return }
                 self.timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.poll() }
@@ -154,6 +179,7 @@ final class FanController: NSObject {
                 applySmart()
             }
         }
+        saveState()
         onUpdate?()
     }
 
@@ -163,6 +189,7 @@ final class FanController: NSObject {
             lastTargetRPM = fans.map { $0.current }
             applySmart()
         }
+        saveState()
         onUpdate?()
     }
 
@@ -174,6 +201,7 @@ final class FanController: NSObject {
         if send("RPM \(index) \(Int(rpm.rounded()))") {
             setLastTarget(index, rpm)
         }
+        saveState()
     }
 
     /// 启动时发现残留强制状态时的恢复入口(需要授权)。
@@ -257,6 +285,15 @@ final class FanController: NSObject {
         lastTargetRPM[index] = rpm
     }
 
+    // MARK: - 状态持久化(App 重启后恢复上次风扇模式)
+
+    private func saveState() {
+        let d = UserDefaults.standard
+        d.set(mode.rawValue, forKey: "gtFanMode")
+        d.set(presetKey, forKey: "gtFanPreset")
+        d.set(manualPct, forKey: "gtFanManualPct")
+    }
+
     // MARK: - 特权助手通信
 
     private func ensureHelper() -> Bool {
@@ -264,6 +301,20 @@ final class FanController: NSObject {
         if connectSocket() {
             connected = true
             return true
+        }
+        if autoRepairInstalled {
+            // 常驻守护由 launchd 拉起(KeepAlive),等待重连即可,绝不弹窗
+            var waited = 0.0
+            while waited < 5.0 {
+                usleep(300_000)
+                waited += 0.3
+                if connectSocket() {
+                    connected = true
+                    return true
+                }
+            }
+            notice = "守护进程未响应,可尝试重新启用音频自动修复"
+            return false
         }
         guard spawnHelper() else {
             notice = "授权取消或失败"
@@ -283,11 +334,9 @@ final class FanController: NSObject {
     }
 
     /// 弹出管理员授权并拉起 root 助手(AuthorizationExecuteWithPrivileges)。
-    private func spawnHelper() -> Bool {
-        guard FileManager.default.fileExists(atPath: helperPath) else {
-            notice = "助手程序缺失(gt-fanctl)"
-            return false
-        }
+    /// 以管理员授权执行助手子命令(AEWP 在 Swift 中被标记不可用,
+    /// 但符号仍由 Security 框架导出,经 dlsym 调用,标准密码授权弹窗)。
+    private func runAsRoot(path: String, args: [String]) -> Bool {
         if authRef == nil {
             var ref: AuthorizationRef?
             let flags: AuthorizationFlags = [.interactionAllowed, .extendRights, .preAuthorize]
@@ -298,8 +347,6 @@ final class FanController: NSObject {
             authRef = ref
         }
         guard let auth = authRef else { return false }
-        // AuthorizationExecuteWithPrivileges 在 Swift 中被标记不可用,
-        // 但符号仍由 Security 框架导出,经 dlsym 调用(标准密码授权弹窗)。
         typealias AEWP = @convention(c) (OpaquePointer?, UnsafePointer<CChar>, UInt32,
                                          UnsafePointer<UnsafeMutablePointer<CChar>?>?,
                                          UnsafeMutableRawPointer?) -> Int32
@@ -310,16 +357,52 @@ final class FanController: NSObject {
             return false
         }
         let fn = unsafeBitCast(sym, to: AEWP.self)
-        var argv: [UnsafeMutablePointer<CChar>?] = [
-            strdup("daemon"), strdup(socketPath), strdup("\(getuid())"), nil
-        ]
+        var argv: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0)! } + [nil]
         defer { argv.forEach { free($0) } }
         let status = argv.withUnsafeMutableBufferPointer { buf -> OSStatus in
-            helperPath.withCString { path in
-                fn(auth, path, 0, buf.baseAddress, nil)
+            path.withCString { p in
+                fn(auth, p, 0, buf.baseAddress, nil)
             }
         }
         return status == errAuthorizationSuccess
+    }
+
+    private func spawnHelper() -> Bool {
+        guard FileManager.default.fileExists(atPath: helperPath) else {
+            notice = "助手程序缺失(gt-fanctl)"
+            return false
+        }
+        let ok = runAsRoot(path: helperPath, args: ["daemon", socketPath, "\(getuid())"])
+        if !ok, notice == nil { notice = "授权取消或失败" }
+        return ok
+    }
+
+    /// 启用/停用音频自动修复:把助手安装为常驻 LaunchDaemon(唤醒后自动探测修复),或卸载。
+    @discardableResult
+    func setAutoRepair(_ enabled: Bool) -> Bool {
+        guard FileManager.default.fileExists(atPath: helperPath) else {
+            notice = "助手程序缺失(gt-fanctl)"
+            onUpdate?()
+            return false
+        }
+        let ok = runAsRoot(path: helperPath, args: [enabled ? "install" : "uninstall", "\(getuid())"])
+        guard ok else {
+            notice = notice ?? "授权取消或失败"
+            onUpdate?()
+            return false
+        }
+        if enabled {
+            var waited = 0.0
+            while waited < 4.0, !autoRepairInstalled {
+                usleep(200_000)
+                waited += 0.2
+            }
+            notice = autoRepairInstalled ? "音频自动修复已启用(每次唤醒后自动检测)" : "安装未确认,请稍后重试"
+        } else {
+            notice = "音频自动修复已关闭"
+        }
+        onUpdate?()
+        return true
     }
 
     private func connectSocket() -> Bool {

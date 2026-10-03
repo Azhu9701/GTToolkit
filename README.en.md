@@ -25,7 +25,8 @@ The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` vol
 - Auto-detects the HUAWEI display (manufacturer `HWV` / name match); pin any DDC display or CoreAudio device (Bluetooth, built-in speakers, …) from the device list
 - "Follow system default output" mode: controls the default output directly, or maps it to the same-named display's speakers over DDC when the default output has no volume control (typical DP monitor case)
 - **Take over the keyboard volume keys** (optional, requires Accessibility permission): intercept F1/F2/F3 and step the target volume by 5% — making the Mac's local volume keys actually work on the monitor
-- **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection
+- **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection; fan mode persists across relaunches
+- **Automatic DP-audio repair** (optional, one admin prompt to enable): a resident daemon silently probes the default output after every display wake and restarts the audio service automatically if it has wedged
 - **One-click audio repair**: when the monitor wakes from sleep and DP audio wedges (playback fails with `AudioQueueStart failed`, system-wide silence), one menu click restarts the audio service (requires admin authorization)
 - Reacts to display hot-plug and default-output changes; falls back to follow-default when a pinned device disappears
 - Launch at login (SMAppService)
@@ -44,6 +45,15 @@ Safety design:
 - Writing fan-control keys (`F0Md`/`F0Tg`) requires root. The app embeds a tiny privileged helper, `gt-fanctl`; enabling control shows **one admin password prompt**. The helper accepts only whitelisted fan commands over a 0600 local socket
 - RPM is always clamped to the SMC-reported [min, max] range; ≥90°C forces full speed in smart mode, ≥95°C forces full speed in any non-auto mode
 - Quitting the app restores system auto; a dropped helper connection restores system auto immediately; the helper also clears any stale forced state at startup
+
+## Automatic DP-audio repair
+
+After the display wakes from sleep, macOS's DP audio driver occasionally wedges — the device exists and the amp is fine, but **no app can start an audio stream** (`AudioQueueStart failed ('stop')`), leaving the system silent until `sudo killall coreaudiod`. This feature automates it away:
+
+- Click "音频自动修复" in the menu → the helper installs itself as a resident LaunchDaemon (`com.sounds.gtfanctl`, starts at boot, auto-restarted if it crashes). **One admin prompt, never again**
+- After every display reconfiguration (including sleep/wake), the daemon silently starts a **zero-volume probe stream** on the default output: failure means wedged → it restarts the audio service and re-probes, up to 3 times
+- The probe is inaudible and takes milliseconds; skipped while displays sleep; 45s cooldown prevents loops
+- Clicking the same item again fully uninstalls the daemon
 
 ## Build & Run
 
@@ -94,7 +104,7 @@ Sources/DDCController.swift      # DDC/CI: display discovery, IOAVService I2C, V
 Sources/VolumeManager.swift      # Unified target model: follow-default / pinned audio device / pinned DDC display
 Sources/SMCLite.swift            # SMC low level: key read-write, fan speeds, temperature discovery (shared with helper)
 Sources/FanController.swift      # Smart fan management: temperature curve, modes, helper communication
-Sources/FanHelperMain.swift      # gt-fanctl privileged helper (root): whitelisted fan commands, auto-restore on disconnect
+Sources/FanHelperMain.swift      # gt-fanctl privileged helper (root): resident daemon, whitelisted commands, wake-probe auto-repair, auto-restore on disconnect
 Sources/MediaKeyTap.swift        # CGEventTap media-key takeover (requires Accessibility)
 Sources/MenuBarController.swift  # Menu bar UI: slider, device list, fan section, status icon, launch-at-login
 Sources/main.swift               # Entry point
@@ -109,7 +119,7 @@ Info.plist / build.sh / build-dmg.sh
 - **Volume keys do nothing**: enable "Take over keyboard volume keys" and grant Accessibility; the system OSD is suppressed while the tap is active — the menu bar icon is the feedback.
 - **Need a second opinion**: the protocol matches [waydabber/m1ddc](https://github.com/waydabber/m1ddc); `m1ddc display 1 get volume` cross-checks values.
 - **Fan control did not prompt / auth was cancelled**: the notice at the bottom of the menu explains it — click Smart or Manual again to retry. System auto mode never needs privileges.
-- **System-wide silence after the monitor wakes**: that's wedged DP audio (any app fails with `AudioQueueStart failed`) — click "修复系统音频" in the menu to restart the audio service, or run `sudo killall coreaudiod` manually.
+- **System-wide silence after the monitor wakes**: wedged DP audio (playback fails with `AudioQueueStart failed`). Enable "音频自动修复" to auto-repair on every wake; or click "修复系统音频" to restart the audio service manually, or run `sudo killall coreaudiod`.
 - **Fans stuck after a crash**: reopen the app — a "restore auto" entry appears in the menu (the helper also clears stale forced state on startup).
 
 ## License
