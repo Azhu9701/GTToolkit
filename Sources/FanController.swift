@@ -1,6 +1,5 @@
 import Foundation
 import AppKit
-import Security
 import Darwin
 
 /// 智能风扇管理:SMC 直读温度与转速,风扇控制键(F0Md/F0Tg)的写入需要 root,
@@ -53,7 +52,6 @@ final class FanController: NSObject {
 
     private var timer: Timer?
     private var sockFD: Int32 = -1
-    private var authRef: AuthorizationRef?
     private var lastTargetRPM: [Double] = []
     private var emergencyActive = false
 
@@ -334,37 +332,39 @@ final class FanController: NSObject {
     }
 
     /// 弹出管理员授权并拉起 root 助手(AuthorizationExecuteWithPrivileges)。
-    /// 以管理员授权执行助手子命令(AEWP 在 Swift 中被标记不可用,
-    /// 但符号仍由 Security 框架导出,经 dlsym 调用,标准密码授权弹窗)。
-    private func runAsRoot(path: String, args: [String]) -> Bool {
-        if authRef == nil {
-            var ref: AuthorizationRef?
-            let flags: AuthorizationFlags = [.interactionAllowed, .extendRights, .preAuthorize]
-            guard AuthorizationCreate(nil, nil, flags, &ref) == errAuthorizationSuccess, let ref else {
-                notice = "授权创建失败"
-                return false
-            }
-            authRef = ref
+    // MARK: - 特权执行(标准管理员授权弹窗)
+
+    private func shQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    func appLog(_ s: String) {
+        let line = "(\(Date())) \(s)\n"
+        let p = "/tmp/gt-fanctl-app.log"
+        if let fh = FileHandle(forWritingAtPath: p) {
+            fh.seekToEndOfFile()
+            fh.write(line.data(using: .utf8)!)
+            fh.closeFile()
+        } else {
+            try? line.write(toFile: p, atomically: true, encoding: .utf8)
         }
-        guard let auth = authRef else { return false }
-        typealias AEWP = @convention(c) (OpaquePointer?, UnsafePointer<CChar>, UInt32,
-                                         UnsafePointer<UnsafeMutablePointer<CChar>?>?,
-                                         UnsafeMutableRawPointer?) -> Int32
-        let sym = dlsym(dlopen(nil, RTLD_NOW), "AuthorizationExecuteWithPrivileges")
-            ?? dlsym(dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY), "AuthorizationExecuteWithPrivileges")
-        guard let sym else {
-            notice = "当前系统不支持特权执行"
-            return false
+    }
+
+    /// 通过 osascript 管理员授权以 root 执行 shell 命令(会弹标准密码框)。
+    private func runAsRoot(_ command: String) -> (ok: Bool, stderr: String) {
+        let script = "do shell script \"\(command)\" with administrator privileges"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        let errPipe = Pipe()
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = errPipe
+        guard (try? p.run()) != nil else {
+            return (false, "osascript 无法启动")
         }
-        let fn = unsafeBitCast(sym, to: AEWP.self)
-        var argv: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0)! } + [nil]
-        defer { argv.forEach { free($0) } }
-        let status = argv.withUnsafeMutableBufferPointer { buf -> OSStatus in
-            path.withCString { p in
-                fn(auth, p, 0, buf.baseAddress, nil)
-            }
-        }
-        return status == errAuthorizationSuccess
+        p.waitUntilExit()
+        let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (p.terminationStatus == 0, err.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func spawnHelper() -> Bool {
@@ -372,37 +372,53 @@ final class FanController: NSObject {
             notice = "助手程序缺失(gt-fanctl)"
             return false
         }
-        let ok = runAsRoot(path: helperPath, args: ["daemon", socketPath, "\(getuid())"])
-        if !ok, notice == nil { notice = "授权取消或失败" }
+        // 守护常驻不退出,后台化并丢弃输出,让 osascript 立即返回
+        let (ok, err) = runAsRoot("\(shQuote(helperPath)) daemon \(shQuote(socketPath)) \(getuid()) > /dev/null 2>&1 &")
+        appLog("spawnHelper ok=\(ok) err=\(err)")
+        if !ok, notice == nil { notice = "授权取消或失败: \(err)" }
         return ok
     }
 
     /// 启用/停用音频自动修复:把助手安装为常驻 LaunchDaemon(唤醒后自动探测修复),或卸载。
-    @discardableResult
-    func setAutoRepair(_ enabled: Bool) -> Bool {
-        guard FileManager.default.fileExists(atPath: helperPath) else {
-            notice = "助手程序缺失(gt-fanctl)"
-            onUpdate?()
-            return false
-        }
-        let ok = runAsRoot(path: helperPath, args: [enabled ? "install" : "uninstall", "\(getuid())"])
-        guard ok else {
-            notice = notice ?? "授权取消或失败"
-            onUpdate?()
-            return false
-        }
-        if enabled {
-            var waited = 0.0
-            while waited < 4.0, !autoRepairInstalled {
-                usleep(200_000)
-                waited += 0.2
+    func setAutoRepair(_ enabled: Bool, completion: (() -> Void)? = nil) {
+        appLog("toggle autoRepair enabled=\(enabled)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            guard FileManager.default.fileExists(atPath: self.helperPath) else {
+                DispatchQueue.main.async {
+                    self.notice = "助手程序缺失(gt-fanctl)"
+                    self.onUpdate?()
+                    completion?()
+                }
+                return
             }
-            notice = autoRepairInstalled ? "音频自动修复已启用(每次唤醒后自动检测)" : "安装未确认,请稍后重试"
-        } else {
-            notice = "音频自动修复已关闭"
+            let cmd = enabled
+                ? "\(self.shQuote(self.helperPath)) install \(getuid()) \(self.shQuote(self.helperPath))"
+                : "\(self.shQuote(self.helperPath)) uninstall"
+            let (ok, err) = self.runAsRoot(cmd)
+            self.appLog("install ok=\(ok) err=\(err)")
+
+            var notice: String
+            if !ok {
+                notice = "授权失败: \(err.isEmpty ? "已取消" : err)"
+            } else if enabled {
+                var waited = 0.0
+                while waited < 4.0, !self.autoRepairInstalled {
+                    usleep(200_000)
+                    waited += 0.2
+                }
+                notice = self.autoRepairInstalled
+                    ? "音频自动修复已启用(每次唤醒后自动检测)"
+                    : "安装未确认,详见 /tmp/gt-fanctl-install.log"
+            } else {
+                notice = "音频自动修复已关闭"
+            }
+            DispatchQueue.main.async {
+                self.notice = notice
+                self.onUpdate?()
+                completion?()
+            }
         }
-        onUpdate?()
-        return true
     }
 
     private func connectSocket() -> Bool {

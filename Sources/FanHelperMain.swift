@@ -37,7 +37,7 @@ struct GTFanHelper {
             guard args.count >= 4 else { usage(); exit(2) }
             daemonRun(socketPath: args[2], uidArg: args[3])
         case "install":
-            install(uidArg: args.count > 2 ? args[2] : "")
+            install(uidArg: args.count > 2 ? args[2] : "", sourceArg: args.count > 3 ? args[3] : nil)
         case "uninstall":
             uninstall()
         default:
@@ -51,18 +51,34 @@ struct GTFanHelper {
 
     // MARK: - 安装 / 卸载(root)
 
-    static func install(uidArg: String) {
-        guard getuid() == 0 else { fputs("install 需要 root\n", stderr); exit(1) }
+    static func logLine(_ s: String) {
+        let line = "(\(Date())) \(s)\n"
+        let p = "/tmp/gt-fanctl-install.log"
+        if let fh = FileHandle(forWritingAtPath: p) {
+            fh.seekToEndOfFile()
+            fh.write(line.data(using: .utf8)!)
+            fh.closeFile()
+        } else {
+            try? line.write(toFile: p, atomically: true, encoding: .utf8)
+        }
+    }
+
+    static func install(uidArg: String, sourceArg: String?) {
+        logLine("install 开始 uid=\(uidArg) source=\(sourceArg ?? "nil") getuid=\(getuid())")
+        guard getuid() == 0 else { logLine("install 失败:非 root"); fputs("install 需要 root\n", stderr); exit(1) }
         let uid = uidArg.isEmpty ? String(getuid()) : uidArg
         let fm = FileManager.default
         let selfPath = CommandLine.arguments[0]
+        let source = (sourceArg?.isEmpty == false) ? sourceArg! : selfPath
         let socketPath = "/tmp/gt-fanctl-\(uid).sock"
 
         do {
+            logLine("创建目录 /Library/PrivilegedHelperTools")
             try fm.createDirectory(atPath: (helperInstallPath as NSString).deletingLastPathComponent,
                                    withIntermediateDirectories: true)
+            logLine("拷贝助手 \(source) → \(helperInstallPath)")
             if fm.fileExists(atPath: helperInstallPath) { try fm.removeItem(atPath: helperInstallPath) }
-            try fm.copyItem(atPath: selfPath, toPath: helperInstallPath)
+            try fm.copyItem(atPath: source, toPath: helperInstallPath)
             chmod(helperInstallPath, 0o755)
             chown(helperInstallPath, 0, 0)
 
@@ -97,10 +113,13 @@ struct GTFanHelper {
             exit(1)
         }
 
+        logLine("bootout + bootstrap \(serviceLabel)")
         _ = runCmd("/bin/launchctl", ["bootout", "system/\(serviceLabel)"])
         if runCmd("/bin/launchctl", ["bootstrap", "system", plistInstallPath]) != 0 {
+            logLine("bootstrap 失败,回退 load -w")
             _ = runCmd("/bin/launchctl", ["load", "-w", plistInstallPath])
         }
+        logLine("安装完成")
         print("已安装并启动: \(serviceLabel)")
     }
 

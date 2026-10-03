@@ -471,8 +471,10 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     }
 
     @objc private func toggleAutoRepair(_ sender: NSMenuItem) {
-        fan.setAutoRepair(!fan.autoRepairInstalled)
-        rebuildMenu()
+        let enabling = !fan.autoRepairInstalled
+        fan.setAutoRepair(enabling) { [weak self] in
+            self?.rebuildMenu()
+        }
     }
 
     @objc private func fanSliderChanged(_ sender: NSSlider) {
