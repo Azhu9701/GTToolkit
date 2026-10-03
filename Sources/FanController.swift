@@ -191,6 +191,29 @@ final class FanController: NSObject {
         return true
     }
 
+    /// 重启系统音频服务,修复 DP 音频假死导致的系统级无声(播放报 AudioQueueStart failed)。
+    /// 首次使用会弹一次管理员授权;重启后所有正在播放的流会中断,重新播放即可。
+    @discardableResult
+    func resetCoreAudio() -> Bool {
+        guard ensureHelper() else {
+            notice = "修复音频需要管理员授权"
+            onUpdate?()
+            return false
+        }
+        let ok = send("AUDIO-RESET")
+        notice = ok ? "音频服务已重启,重新播放一次即可" : "修复失败(助手未连接)"
+        onUpdate?()
+        if ok {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                if self?.notice == "音频服务已重启,重新播放一次即可" {
+                    self?.notice = nil
+                    self?.onUpdate?()
+                }
+            }
+        }
+        return ok
+    }
+
     // MARK: - 智能温控
 
     private func applySmart() {

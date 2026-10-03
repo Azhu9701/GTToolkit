@@ -116,6 +116,9 @@ struct GTFanHelper {
         case "ALLAUTO":
             restoreAuto()
             return "OK"
+        case "AUDIO-RESET":
+            // 重启系统音频服务,修复 DP 音频假死(播放报 AudioQueueStart failed)
+            return audioReset() ? "OK" : "ERR reset"
         case "MODE":
             guard parts.count == 3, let i = Int(parts[1]), i < fanCount,
                   let m = UInt8(parts[2]), m <= 1 else { return "ERR args" }
@@ -135,5 +138,24 @@ struct GTFanHelper {
         for i in 0..<count {
             _ = smc.writeUInt8("F\(i)Md", 0)
         }
+    }
+
+    static func audioReset() -> Bool {
+        // 首选 launchctl 平滑重启;失败则直接 killall(launchd 会自动拉起 coreaudiod)
+        let kick = Process()
+        kick.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        kick.arguments = ["kickstart", "-k", "system/com.apple.audio.coreaudiod"]
+        kick.standardOutput = FileHandle.nullDevice
+        kick.standardError = FileHandle.nullDevice
+        if (try? kick.run()) != nil {
+            kick.waitUntilExit()
+            if kick.terminationStatus == 0 { return true }
+        }
+        let kill = Process()
+        kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        kill.arguments = ["coreaudiod"]
+        kill.standardOutput = FileHandle.nullDevice
+        kill.standardError = FileHandle.nullDevice
+        return ((try? kill.run()) != nil) && { kill.waitUntilExit(); return kill.terminationStatus == 0 }()
     }
 }

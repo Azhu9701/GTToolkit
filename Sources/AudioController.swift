@@ -287,3 +287,19 @@ private final class ListenerToken {
         AudioObjectRemovePropertyListenerBlock(objectID, &addr, queue, block)
     }
 }
+
+extension AudioController {
+    /// 设置系统默认输出设备(用于诊断/修复 DP 音频假死)。
+    @discardableResult
+    func setDefaultOutput(_ id: AudioDeviceID) -> Bool {
+        var deviceID = id
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+            UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID)
+        return status == noErr
+    }
+}

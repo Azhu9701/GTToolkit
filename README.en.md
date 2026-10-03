@@ -26,6 +26,7 @@ The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` vol
 - "Follow system default output" mode: controls the default output directly, or maps it to the same-named display's speakers over DDC when the default output has no volume control (typical DP monitor case)
 - **Take over the keyboard volume keys** (optional, requires Accessibility permission): intercept F1/F2/F3 and step the target volume by 5% — making the Mac's local volume keys actually work on the monitor
 - **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection
+- **One-click audio repair**: when the monitor wakes from sleep and DP audio wedges (playback fails with `AudioQueueStart failed`, system-wide silence), one menu click restarts the audio service (requires admin authorization)
 - Reacts to display hot-plug and default-output changes; falls back to follow-default when a pinned device disappears
 - Launch at login (SMAppService)
 - No microphone or other intrusive permissions
@@ -108,6 +109,7 @@ Info.plist / build.sh / build-dmg.sh
 - **Volume keys do nothing**: enable "Take over keyboard volume keys" and grant Accessibility; the system OSD is suppressed while the tap is active — the menu bar icon is the feedback.
 - **Need a second opinion**: the protocol matches [waydabber/m1ddc](https://github.com/waydabber/m1ddc); `m1ddc display 1 get volume` cross-checks values.
 - **Fan control did not prompt / auth was cancelled**: the notice at the bottom of the menu explains it — click Smart or Manual again to retry. System auto mode never needs privileges.
+- **System-wide silence after the monitor wakes**: that's wedged DP audio (any app fails with `AudioQueueStart failed`) — click "修复系统音频" in the menu to restart the audio service, or run `sudo killall coreaudiod` manually.
 - **Fans stuck after a crash**: reopen the app — a "restore auto" entry appears in the menu (the helper also clears stale forced state on startup).
 
 ## License
