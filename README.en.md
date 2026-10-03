@@ -1,10 +1,10 @@
 # GT Volume Assistant (GTVolume)
 
+<img src="docs/icon-128.png" width="96" alt="GT Volume Assistant icon" align="right">
+
 [English](README.en.md) | 简体中文
 
-![GT 音量助手菜单截图](docs/screenshot-menu.png)
-
-A macOS menu bar volume controller built for the **HUAWEI MateView GT 27 monitor** (QSN-CBB / HWV), compatible with other displays and audio devices. It controls the monitor's **actual speaker volume** via DDC/CI — the same path as the monitor's physical buttons — and can take over the macOS volume keys to truly bridge the system's local volume management.
+A macOS menu bar volume controller built for the **HUAWEI MateView GT 27 monitor** (QSN-CBB / HWV), compatible with other displays and audio devices. It controls the monitor's **actual speaker volume** via DDC/CI — the same path as the monitor's physical buttons — and can take over the macOS volume keys to truly bridge the system's local volume management. Includes smart fan management.
 
 Pure Swift, builds with Command Line Tools only (no Xcode project needed). The DDC path follows the protocol validated by [waydabber/m1ddc](https://github.com/waydabber/m1ddc). MIT licensed.
 
@@ -58,6 +58,8 @@ For a distributable DMG: `./build-dmg.sh`.
 Tip: move `GTVolume.app` into `/Applications` before enabling "Launch at Login"; if you move it later, toggle that option off and on again.
 
 ## Usage
+
+![Menu screenshot](docs/screenshot-menu.png)
 
 - Click the menu bar speaker icon and drag the slider
 - "Display speakers (DDC)" section: check any display to pin it

@@ -1,10 +1,10 @@
 # GT 音量助手(GTVolume)
 
+<img src="docs/icon-128.png" width="96" alt="GT 音量助手图标" align="right">
+
 简体中文 | [English](README.en.md)
 
-![GT 音量助手菜单截图](docs/screenshot-menu.png)
-
-菜单栏音量控制工具,为**华为 MateView GT 27 显示器**(QSN-CBB / HWV)打造,兼容其他显示器与音频设备。直接控制显示器喇叭的实际音量(DDC/CI 协议,与显示器物理按钮等效),并可与 macOS 本地音量管理打通(键盘音量键接管)。
+菜单栏音量控制工具,为**华为 MateView GT 27 显示器**(QSN-CBB / HWV)打造,兼容其他显示器与音频设备。直接控制显示器喇叭的实际音量(DDC/CI 协议,与显示器物理按钮等效),并可与 macOS 本地音量管理打通(键盘音量键接管),附带智能风扇管理。
 
 纯 Swift + Command Line Tools 构建,无需 Xcode 工程;使用 [waydabber/m1ddc](https://github.com/waydabber/m1ddc) 验证过的 DDC 通路。MIT 许可证。
 
@@ -58,6 +58,8 @@ open GTVolume.app
 建议把 `GTVolume.app` 拖入「应用程序」文件夹后再开启「登录时自动启动」;移动位置后需把该选项关掉再开一次。
 
 ## 使用
+
+![菜单截图](docs/screenshot-menu.png)
 
 - 点击菜单栏喇叭图标,拖动滑杆调节音量
 - 「显示器喇叭(DDC)」区:勾选任意一台显示器锁定控制

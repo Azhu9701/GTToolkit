@@ -8,6 +8,8 @@
 	<string>GT 音量助手</string>
 	<key>CFBundleExecutable</key>
 	<string>GTVolume</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.sounds.gtvolume</string>
 	<key>CFBundleInfoDictionaryVersion</key>

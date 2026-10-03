@@ -29,6 +29,8 @@ swiftc -O -swift-version 5 \
   -framework IOKit
 
 cp Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp Assets/AppIcon.icns "$APP/Contents/Resources/"
 codesign --force --sign - "$APP"
 
 echo "构建完成:$(pwd)/$APP"
