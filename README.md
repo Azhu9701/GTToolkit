@@ -1,12 +1,41 @@
 # GT 音量助手(GTVolume)
 
-<img src="docs/icon-128.png" width="96" alt="GT 音量助手图标" align="right">
+<div align="center">
+  <img src="docs/icon-128.png" width="110" alt="GT 音量助手图标">
+
+  **macOS 菜单栏工具箱:显示器音量 · 智能风扇 · 本地/远程大模型监测**
+
+  [![Release](https://img.shields.io/github/v/release/Azhu9701/GTVolume)](https://github.com/Azhu9701/GTVolume/releases)
+  ![Platform](https://img.shields.io/badge/macOS-13%2B%20·%20Apple%20Silicon-black)
+  [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+  ![Build](https://img.shields.io/badge/构建-Swift%20%2B%20CLT-orange)
+</div>
 
 简体中文 | [English](README.en.md)
 
-菜单栏音量控制工具,为**华为 MateView GT 27 显示器**(QSN-CBB / HWV)打造,兼容其他显示器与音频设备。直接控制显示器喇叭的实际音量(DDC/CI 协议,与显示器物理按钮等效),并可与 macOS 本地音量管理打通(键盘音量键接管),附带智能风扇管理。
+从「给华为 MateView GT 27 显示器补一个音量控制」开始,逐渐长成了菜单栏工具箱:显示器音量直控、智能风扇调速、本地与局域网大模型监测管理、音频假死自愈。纯 Swift + Command Line Tools 构建,无需 Xcode 工程;MIT 许可证。
 
-纯 Swift + Command Line Tools 构建,无需 Xcode 工程;使用 [waydabber/m1ddc](https://github.com/waydabber/m1ddc) 验证过的 DDC 通路。MIT 许可证。
+**安装**:到 [Releases](https://github.com/Azhu9701/GTVolume/releases) 下载 `GTVolume-x.x.x-arm64.dmg`,拖入「应用程序」即可;也可从源码构建(见下文)。
+
+![菜单截图](docs/screenshot-menu.png)
+
+## 功能总览
+
+| 模块 | 能做什么 |
+| --- | --- |
+| 🔊 [显示器音量](#为什么需要它) | DDC/CI 直控显示器喇叭的**实际音量**(与物理按键等效),接管键盘音量键,支持任意 DDC 显示器与 CoreAudio 设备 |
+| 🌡️ [智能风扇](#智能风扇管理) | SMC 直读温度/转速,温控曲线三档预设、手动调速、高温保护,替代 macOS 过于保守的风扇策略 |
+| 🤖 [本地模型](#本地模型运行时监测) | 自动发现本机 Ollama / LM Studio / MLX / llama.cpp:已加载模型、显存、量化、保活倒计时,一键卸载 / 保活 |
+| 🌐 [远程模型](#远程模型监测windows--局域网) | 监测局域网 Windows / Linux 机器上的 Ollama / LM Studio / llama.cpp / vLLM,远程 Ollama 同样可卸载、保活 |
+| 🩺 [音频自愈](#音频假死自动修复) | 显示器唤醒后 DP 音频假死自动重启音频服务,常驻守护全程无感;也可一键手动修复 |
+
+| 版本 | 更新 |
+| --- | --- |
+| v1.4.0 | 远程模型监测(Windows / 局域网) |
+| v1.3.0 | 本地模型运行时监测与管理 |
+| v1.2.x | 音频假死自动修复(根治 DP 音频假死) |
+| v1.1.x | 智能风扇管理、应用图标 |
+| v1.0 | 显示器音量控制 + 键盘音量键接管 |
 
 ## 为什么需要它
 
@@ -17,7 +46,7 @@
 
 唯一通路是显示器的 DDC/CI 接口(VCP 0x62 音量 / 0x8D 静音),本 App 通过 Apple Silicon 的 IOAVService 私有 API 直连(与 MonitorControl、m1ddc 同源),已在 Mac Studio + DP 连接下实测读写可用。
 
-## 功能
+## 显示器音量
 
 - 菜单栏喇叭图标 + 滑杆,实时控制显示器喇叭音量(百分比显示,图标随音量/静音变化)
 - 静音切换(VCP 0x8D;显示器不支持时以音量 0 模拟)
@@ -25,14 +54,8 @@
 - 自动识别华为显示器(厂商 HWV / 名称匹配),也可在设备列表锁定任意 DDC 显示器或 CoreAudio 设备(蓝牙、内建扬声器等)
 - 「跟随系统默认输出」:默认输出是普通设备时直接控制它;是无音量控制的 DP 显示器时自动映射到同名显示器喇叭
 - **接管键盘音量键**(可选,需辅助功能权限):拦截 F1/F2/F3 音量键,±5% 步进控制显示器音量——把 mac 本地音量键真正"打通"到显示器
-- **智能风扇管理**(可选,首次开启需管理员授权):温度曲线调速、手动 RPM 调速、高温保护;模式跨重启记忆
-- **本地模型运行时监测**(Ollama / LM Studio / MLX / llama.cpp):自动发现本机在跑的推理服务,显示已加载模型、显存占用、参数量化、保活倒计时与进程 CPU/内存,附 GPU 利用率与统一内存压力;Ollama 支持一键卸载/批量卸载/续期保活
-- **局域网远程模型监测**(Windows / Linux):手动添加 IP:端口或一键扫描 /24 网段,自动识别 Windows 机器上跑的 Ollama / LM Studio / llama.cpp / vLLM,远程 Ollama 同样支持卸载与保活
-- **音频假死自动修复**(可选,启用需一次管理员授权):常驻守护在每次显示器唤醒后静默探测,假死自动重启音频服务,全程无感
-- **一键修复系统音频**:显示器睡眠唤醒后 DP 音频假死(播放报 `AudioQueueStart failed`)导致系统级无声时,菜单里点一下即可重启音频服务
 - 显示器插拔、默认输出切换实时响应;锁定的设备被拔出时自动回退
-- 登录时自动启动(SMAppService)
-- 无需麦克风等其他权限
+- 登录时自动启动(SMAppService);无需麦克风等其他权限
 
 ## 智能风扇管理
 
@@ -56,10 +79,11 @@ macOS 自带的风扇策略偏保守,本 App 通过 SMC 直读温度与转速,�
 - 每次显示器重配置(含睡眠唤醒)后,守护在默认输出上静默启动一个**无声测试流**:失败即判定假死 → 自动重启音频服务 → 复测,最多 3 次
 - 探测流零音量、毫秒级,健康时完全无感;睡眠中不探测;内置 45 秒冷却防抖
 - 再点一次同一菜单项即完全卸载守护
+- 没有启用自动修复时,也可点「修复系统音频」一键重启音频服务
 
 ## 本地模型运行时监测
 
-菜单里新增「本地模型」区,自动发现本机正在运行的推理服务并给出可操作的管理入口,不用再开终端敲命令。
+菜单里的「本地模型」区,自动发现本机正在运行的推理服务并给出可操作的管理入口,不用再开终端敲命令。
 
 **监测的运行时**(探测各自本地 API,请求显式绕过系统代理,避免被 127.0.0.1 上的科学上网代理拦截):
 
@@ -127,8 +151,6 @@ open GTVolume.app
 
 ## 使用
 
-![菜单截图](docs/screenshot-menu.png)
-
 - 点击菜单栏喇叭图标,拖动滑杆调节音量
 - 「显示器喇叭(DDC)」区:勾选任意一台显示器锁定控制
 - 「输出设备」区:蓝牙耳机、内建扬声器等 CoreAudio 设备(走系统音量属性,与音量键天然同步)
@@ -161,10 +183,10 @@ Sources/DDCController.swift      # DDC/CI 封装:显示器发现、IOAVService I
 Sources/VolumeManager.swift      # 统一目标模型:跟随默认输出 / 锁定音频设备 / 锁定 DDC 显示器
 Sources/SMCLite.swift            # SMC 底层:键读写、风扇转速、温度键发现(App 与助手共用)
 Sources/FanController.swift      # 智能风扇管理:温度曲线、模式切换、特权助手通信
-Sources/ModelMonitor.swift       # 本地模型监测:运行时探测、模型/显存/保活、GPU 与内存压力、卸载与启停
+Sources/ModelMonitor.swift       # 本地与远程模型监测:运行时探测、模型/显存/保活、GPU 与内存压力、卸载与启停
 Sources/FanHelperMain.swift      # gt-fanctl 特权助手(root):常驻守护、白名单命令、唤醒探测自动修复、断连恢复
 Sources/MediaKeyTap.swift        # CGEventTap 键盘音量键接管(需辅助功能权限)
-Sources/MenuBarController.swift  # 菜单栏 UI:滑杆、设备列表、风扇区、状态图标、开机自启
+Sources/MenuBarController.swift  # 菜单栏 UI:滑杆、设备列表、风扇区、模型区、状态图标、开机自启
 Sources/main.swift               # 入口
 tools/main.swift                 # CLI 自检工具(音量通路)
 tools/smc_probe.swift            # CLI 自检工具(SMC 风扇/温度键)
@@ -179,6 +201,7 @@ Info.plist / build.sh / build-dmg.sh
 - **开启风扇控制没弹密码 / 取消了授权**:菜单底部会显示提示,重新点「智能温控」或「手动调速」即可再次授权;授权只在开启时需要,系统自动模式完全无需权限。
 - **显示器唤醒后系统级无声**:DP 音频假死(播放报 `AudioQueueStart failed`)。启用「音频自动修复」后每次唤醒会自动修;也可点「修复系统音频」手动重启音频服务,或手动 `sudo killall coreaudiod`。
 - **异常退出后风扇停在固定转速**:重新打开 App,菜单里会出现「恢复自动」入口,点击即可(助手启动时也会主动清理残留)。
+- **扫不到 Windows 上的 Ollama**:确认 Windows 端已把服务监听改为 0.0.0.0(见「远程模型监测」的配置说明)并放行了防火墙入站端口;然后在菜单里点「扫描局域网」。
 - **m1ddc 参考**:本实现与 [waydabber/m1ddc](https://github.com/waydabber/m1ddc) 协议一致,可用 `m1ddc display 1 get volume` 交叉验证。
 
 ## 许可证

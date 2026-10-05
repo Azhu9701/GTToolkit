@@ -1,12 +1,41 @@
 # GT Volume Assistant (GTVolume)
 
-<img src="docs/icon-128.png" width="96" alt="GT Volume Assistant icon" align="right">
+<div align="center">
+  <img src="docs/icon-128.png" width="110" alt="GT Volume Assistant icon">
+
+  **macOS menu bar toolkit: display volume · smart fan · local & LAN LLM monitoring**
+
+  [![Release](https://img.shields.io/github/v/release/Azhu9701/GTVolume)](https://github.com/Azhu9701/GTVolume/releases)
+  ![Platform](https://img.shields.io/badge/macOS-13%2B%20·%20Apple%20Silicon-black)
+  [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+  ![Build](https://img.shields.io/badge/build-Swift%20%2B%20CLT-orange)
+</div>
 
 [English](README.en.md) | 简体中文
 
-A macOS menu bar volume controller built for the **HUAWEI MateView GT 27 monitor** (QSN-CBB / HWV), compatible with other displays and audio devices. It controls the monitor's **actual speaker volume** via DDC/CI — the same path as the monitor's physical buttons — and can take over the macOS volume keys to truly bridge the system's local volume management. Includes smart fan management.
+What started as "a volume controller for the HUAWEI MateView GT 27" grew into a menu bar toolkit: direct display volume control, smart fan management, local & LAN model (LLM) monitoring, and automatic DP-audio repair. Pure Swift, builds with Command Line Tools only (no Xcode project needed); MIT licensed.
 
-Pure Swift, builds with Command Line Tools only (no Xcode project needed). The DDC path follows the protocol validated by [waydabber/m1ddc](https://github.com/waydabber/m1ddc). MIT licensed.
+**Install**: grab `GTVolume-x.x.x-arm64.dmg` from [Releases](https://github.com/Azhu9701/GTVolume/releases) and drag it into /Applications, or build from source (below).
+
+![Menu screenshot](docs/screenshot-menu.png)
+
+## Feature map
+
+| Module | What it does |
+| --- | --- |
+| 🔊 [Display volume](#why-this-exists) | Drives the monitor's **actual speaker volume** via DDC/CI (same path as its physical buttons), takes over the keyboard volume keys, works with any DDC display and CoreAudio device |
+| 🌡️ [Smart fan](#smart-fan-management) | Reads temperatures/RPMs straight from the SMC; temperature-curve presets, manual sliders, overheat protection |
+| 🤖 [Local models](#local-model-runtime-monitoring) | Auto-discovers local Ollama / LM Studio / MLX / llama.cpp: loaded models, VRAM, quantization, keep-alive countdown; unload / keep-alive in one click |
+| 🌐 [Remote models](#remote-model-monitoring-windows--lan) | Monitors Ollama / LM Studio / llama.cpp / vLLM on LAN Windows/Linux boxes; remote Ollama can be unloaded / kept alive too |
+| 🩺 [Audio self-repair](#automatic-dp-audio-repair) | Auto-restarts the audio service when DP audio wedges after display wake; resident daemon, fully unattended; one-click manual repair too |
+
+| Version | Highlights |
+| --- | --- |
+| v1.4.0 | Remote model monitoring (Windows / LAN) |
+| v1.3.0 | Local model runtime monitoring & management |
+| v1.2.x | Automatic DP-audio repair (permanent fix) |
+| v1.1.x | Smart fan management, app icon |
+| v1.0 | Display volume control + keyboard volume-key takeover |
 
 ## Why this exists
 
@@ -17,7 +46,7 @@ When this monitor outputs audio over DisplayPort, macOS offers **no system volum
 
 The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` volume / `0x8D` mute). This app drives it through Apple Silicon's IOAVService API (same approach as MonitorControl and m1ddc), verified working on a Mac Studio over DisplayPort.
 
-## Features
+## Display volume
 
 - Menu bar speaker icon + slider that controls the monitor's real speaker volume (live percentage, icon reflects volume/mute)
 - Mute toggle (VCP `0x8D`; falls back to volume-0 when unsupported)
@@ -25,14 +54,8 @@ The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` vol
 - Auto-detects the HUAWEI display (manufacturer `HWV` / name match); pin any DDC display or CoreAudio device (Bluetooth, built-in speakers, …) from the device list
 - "Follow system default output" mode: controls the default output directly, or maps it to the same-named display's speakers over DDC when the default output has no volume control (typical DP monitor case)
 - **Take over the keyboard volume keys** (optional, requires Accessibility permission): intercept F1/F2/F3 and step the target volume by 5% — making the Mac's local volume keys actually work on the monitor
-- **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection; fan mode persists across relaunches
-- **Local model runtime monitoring** (Ollama / LM Studio / MLX / llama.cpp): auto-discovers inference servers running on this Mac and shows loaded models, VRAM usage, parameter count/quantization, keep-alive countdown and per-process CPU/memory, plus GPU utilization and unified-memory pressure; Ollama models can be unloaded one-by-one or all at once, or have their keep-alive extended
-- **LAN remote model monitoring** (Windows / Linux): add an `IP:port` manually or scan the /24 subnet, and the app auto-identifies Ollama / LM Studio / llama.cpp / vLLM servers on your Windows box; remote Ollama models can be unloaded or kept alive just like local ones
-- **Automatic DP-audio repair** (optional, one admin prompt to enable): a resident daemon silently probes the default output after every display wake and restarts the audio service automatically if it has wedged
-- **One-click audio repair**: when the monitor wakes from sleep and DP audio wedges (playback fails with `AudioQueueStart failed`, system-wide silence), one menu click restarts the audio service (requires admin authorization)
 - Reacts to display hot-plug and default-output changes; falls back to follow-default when a pinned device disappears
-- Launch at login (SMAppService)
-- No microphone or other intrusive permissions
+- Launch at login (SMAppService); no microphone or other intrusive permissions
 
 ## Smart fan management
 
@@ -56,10 +79,11 @@ After the display wakes from sleep, macOS's DP audio driver occasionally wedges 
 - After every display reconfiguration (including sleep/wake), the daemon silently starts a **zero-volume probe stream** on the default output: failure means wedged → it restarts the audio service and re-probes, up to 3 times
 - The probe is inaudible and takes milliseconds; skipped while displays sleep; 45s cooldown prevents loops
 - Clicking the same item again fully uninstalls the daemon
+- Without auto-repair enabled, "修复系统音频" restarts the audio service in one click
 
 ## Local model runtime monitoring
 
-A new "Local models" section in the menu auto-discovers the inference servers running on this Mac and gives you actionable controls without dropping to a terminal.
+The "Local models" section in the menu auto-discovers the inference servers running on this Mac and gives you actionable controls without dropping to a terminal.
 
 **Monitored runtimes** (each probed via its local API; requests deliberately bypass the system proxy so they can't be swallowed by a local proxy on 127.0.0.1):
 
@@ -127,8 +151,6 @@ Tip: move `GTVolume.app` into `/Applications` before enabling "Launch at Login";
 
 ## Usage
 
-![Menu screenshot](docs/screenshot-menu.png)
-
 - Click the menu bar speaker icon and drag the slider
 - "Display speakers (DDC)" section: check any display to pin it
 - "Output devices" section: Bluetooth headsets, built-in speakers and other CoreAudio devices (volume goes through the system volume property, naturally in sync with the volume keys)
@@ -161,10 +183,10 @@ Sources/DDCController.swift      # DDC/CI: display discovery, IOAVService I2C, V
 Sources/VolumeManager.swift      # Unified target model: follow-default / pinned audio device / pinned DDC display
 Sources/SMCLite.swift            # SMC low level: key read-write, fan speeds, temperature discovery (shared with helper)
 Sources/FanController.swift      # Smart fan management: temperature curve, modes, helper communication
-Sources/ModelMonitor.swift       # Local model monitoring: runtime discovery, models/VRAM/keep-alive, GPU & memory, unload/start
+Sources/ModelMonitor.swift       # Local & remote model monitoring: runtime discovery, models/VRAM/keep-alive, GPU & memory, unload/start
 Sources/FanHelperMain.swift      # gt-fanctl privileged helper (root): resident daemon, whitelisted commands, wake-probe auto-repair, auto-restore on disconnect
 Sources/MediaKeyTap.swift        # CGEventTap media-key takeover (requires Accessibility)
-Sources/MenuBarController.swift  # Menu bar UI: slider, device list, fan section, status icon, launch-at-login
+Sources/MenuBarController.swift  # Menu bar UI: slider, device list, fan section, model sections, status icon, launch-at-login
 Sources/main.swift               # Entry point
 tools/main.swift                 # CLI self-check tool (volume path)
 tools/smc_probe.swift            # CLI self-check tool (SMC fan/temperature keys)
@@ -179,6 +201,7 @@ Info.plist / build.sh / build-dmg.sh
 - **Fan control did not prompt / auth was cancelled**: the notice at the bottom of the menu explains it — click Smart or Manual again to retry. System auto mode never needs privileges.
 - **System-wide silence after the monitor wakes**: wedged DP audio (playback fails with `AudioQueueStart failed`). Enable "音频自动修复" to auto-repair on every wake; or click "修复系统音频" to restart the audio service manually, or run `sudo killall coreaudiod`.
 - **Fans stuck after a crash**: reopen the app — a "restore auto" entry appears in the menu (the helper also clears stale forced state on startup).
+- **Can't find Ollama on the Windows box**: make sure the server is bound to 0.0.0.0 (see "Remote model monitoring" above) and the firewall allows the inbound port; then click "Scan LAN" in the menu.
 
 ## License
 
