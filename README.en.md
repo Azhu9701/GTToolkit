@@ -27,6 +27,7 @@ The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` vol
 - **Take over the keyboard volume keys** (optional, requires Accessibility permission): intercept F1/F2/F3 and step the target volume by 5% — making the Mac's local volume keys actually work on the monitor
 - **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection; fan mode persists across relaunches
 - **Local model runtime monitoring** (Ollama / LM Studio / MLX / llama.cpp): auto-discovers inference servers running on this Mac and shows loaded models, VRAM usage, parameter count/quantization, keep-alive countdown and per-process CPU/memory, plus GPU utilization and unified-memory pressure; Ollama models can be unloaded one-by-one or all at once, or have their keep-alive extended
+- **LAN remote model monitoring** (Windows / Linux): add an `IP:port` manually or scan the /24 subnet, and the app auto-identifies Ollama / LM Studio / llama.cpp / vLLM servers on your Windows box; remote Ollama models can be unloaded or kept alive just like local ones
 - **Automatic DP-audio repair** (optional, one admin prompt to enable): a resident daemon silently probes the default output after every display wake and restarts the audio service automatically if it has wedged
 - **One-click audio repair**: when the monitor wakes from sleep and DP audio wedges (playback fails with `AudioQueueStart failed`, system-wide silence), one menu click restarts the audio service (requires admin authorization)
 - Reacts to display hot-plug and default-output changes; falls back to follow-default when a pinned device disappears
@@ -80,6 +81,36 @@ Each runtime is annotated with its process group's CPU and resident memory; a he
 - **Open console**: jumps to the runtime's management UI or local web console.
 
 Polling runs every 5 seconds; while the menu is open, values update in place and the menu is only rebuilt when the set of runtimes/loaded models changes, so it never interrupts your mouse interaction.
+
+## Remote model monitoring (Windows / LAN)
+
+The "Remote models" section watches model servers running on **other machines in your LAN** — the typical case being Ollama or LM Studio installed on a Windows gaming PC: the Mac menu bar shows which models are loaded there, how much VRAM they use, and can even unload them remotely.
+
+**Adding hosts**:
+
+- **Add remote host…**: enter `IP[:port]` (e.g. `192.168.1.23:11434`; defaults to Ollama's 11434), hostnames work too
+- **Scan LAN**: concurrently probes the common inference ports (11434 / 1234 / 8080 / 5001 / 8000 / 5000) across the primary interface's /24 subnet (about 3–10 s); discovered services appear in the menu for one-click adding
+- Added hosts persist; offline ones show "offline" and recover automatically; "Remove" anytime
+
+**Auto-identification** (probed in order by API fingerprint): Ollama (`/api/version`) → llama.cpp (`/props`) → LM Studio (`/api/v0/models`) → generic OpenAI-compatible servers (`/v1/models`, covers vLLM, KoboldCpp, …).
+
+**Remote capabilities**:
+
+| Runtime | Shown | Managed |
+| --- | --- | --- |
+| Ollama | loaded models, VRAM, quantization, keep-alive countdown, total installed | unload one / unload all / extend keep-alive (same as local) |
+| LM Studio | loaded models, quantization, context | monitoring only (no HTTP unload API) |
+| llama.cpp | the loaded gguf model | monitoring only, plus its built-in web UI |
+| OpenAI-compatible | served model list | monitoring only |
+
+**Windows-side configuration** (servers listen on 127.0.0.1 by default):
+
+- Ollama: enable "Expose Ollama to the network" in settings, or set `OLLAMA_HOST=0.0.0.0`
+- LM Studio: enable "Serve on Local Network" on the Developer page
+- llama.cpp: add `--host 0.0.0.0` to the launch command
+- Allow the port in the Windows firewall (inbound rule)
+
+Remote probing shares the same no-proxy request path as local probing and is throttled to once per 12 s, so it never slows local refresh.
 
 ## Build & Run
 

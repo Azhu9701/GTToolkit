@@ -159,7 +159,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         menu.addItem(gpu)
         modelValueItems.append((gpu, { _ in self.gpuLine() }))
 
-        if models.runtimes.isEmpty {
+        if models.localRuntimes.isEmpty {
             let none = NSMenuItem(title: "未检测到运行中的本地模型服务", action: nil, keyEquivalent: "")
             none.isEnabled = false
             none.indentationLevel = 1
@@ -176,90 +176,221 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
             startSub.submenu = sub
             startSub.indentationLevel = 1
             menu.addItem(startSub)
-            return
-        }
+        } else {
+            for rt in models.localRuntimes {
+                let title = NSMenuItem(title: runtimeLine(rt.kind), action: nil, keyEquivalent: "")
+                title.isEnabled = false
+                title.indentationLevel = 1
+                menu.addItem(title)
+                let kind = rt.kind
+                modelValueItems.append((title, { _ in self.runtimeLine(kind) }))
 
-        for rt in models.runtimes {
-            let title = NSMenuItem(title: runtimeLine(rt.kind), action: nil, keyEquivalent: "")
-            title.isEnabled = false
-            title.indentationLevel = 1
-            menu.addItem(title)
-            let kind = rt.kind
-            modelValueItems.append((title, { _ in self.runtimeLine(kind) }))
-
-            if rt.loaded.isEmpty {
-                let idle = NSMenuItem(title: "已安装 \(rt.installed) 个模型 · 当前未加载",
-                                      action: nil, keyEquivalent: "")
-                idle.isEnabled = false
-                idle.indentationLevel = 2
-                menu.addItem(idle)
-                continue
-            }
-
-            for m in rt.loaded {
-                let item = NSMenuItem(title: modelLine(m.name), action: nil, keyEquivalent: "")
-                item.isEnabled = false
-                item.indentationLevel = 2
-                menu.addItem(item)
-                let name = m.name
-                modelValueItems.append((item, { _ in self.modelLine(name) }))
-
-                if rt.controllable {
-                    let unload = NSMenuItem(title: "卸载「\(m.name)」", action: #selector(unloadModel(_:)), keyEquivalent: "")
-                    unload.target = self
-                    unload.representedObject = "\(rt.kind.rawValue)|\(m.name)"
-                    unload.indentationLevel = 3
-                    menu.addItem(unload)
-                } else {
-                    let stop = NSMenuItem(title: "结束进程(释放内存)", action: #selector(terminateRuntime(_:)), keyEquivalent: "")
-                    stop.target = self
-                    stop.representedObject = rt.kind.rawValue
-                    stop.indentationLevel = 3
-                    menu.addItem(stop)
+                if rt.loaded.isEmpty {
+                    let idle = NSMenuItem(title: "已安装 \(rt.installed) 个模型 · 当前未加载",
+                                          action: nil, keyEquivalent: "")
+                    idle.isEnabled = false
+                    idle.indentationLevel = 2
+                    menu.addItem(idle)
+                    continue
                 }
+
+                for m in rt.loaded {
+                    let item = NSMenuItem(title: modelLine(m.name), action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    item.indentationLevel = 2
+                    menu.addItem(item)
+                    let name = m.name
+                    modelValueItems.append((item, { _ in self.modelLine(name) }))
+
+                    if rt.controllable {
+                        let unload = NSMenuItem(title: "卸载「\(m.name)」", action: #selector(unloadModel(_:)), keyEquivalent: "")
+                        unload.target = self
+                        unload.representedObject = "local|\(rt.kind.rawValue)|\(m.name)"
+                        unload.indentationLevel = 3
+                        menu.addItem(unload)
+                    } else {
+                        let stop = NSMenuItem(title: "结束进程(释放内存)", action: #selector(terminateRuntime(_:)), keyEquivalent: "")
+                        stop.target = self
+                        stop.representedObject = rt.kind.rawValue
+                        stop.indentationLevel = 3
+                        menu.addItem(stop)
+                    }
+                }
+
+                if rt.kind == .ollama, rt.loaded.count > 1 {
+                    let all = NSMenuItem(title: "卸载全部", action: #selector(unloadAllModels(_:)), keyEquivalent: "")
+                    all.target = self
+                    all.indentationLevel = 2
+                    menu.addItem(all)
+                }
+                if rt.kind == .ollama, !rt.loaded.isEmpty {
+                    let keep = NSMenuItem(title: "续期保活 30 分钟", action: #selector(keepAliveModels(_:)), keyEquivalent: "")
+                    keep.target = self
+                    keep.indentationLevel = 2
+                    menu.addItem(keep)
+                }
+
+                let open = NSMenuItem(title: "打开 \(rt.kind.title) 控制台", action: #selector(openModelConsole(_:)), keyEquivalent: "")
+                open.target = self
+                open.representedObject = rt.kind.rawValue
+                open.indentationLevel = 2
+                menu.addItem(open)
             }
 
-            if rt.kind == .ollama, rt.loaded.count > 1 {
-                let all = NSMenuItem(title: "卸载全部", action: #selector(unloadAllModels(_:)), keyEquivalent: "")
-                all.target = self
-                all.indentationLevel = 2
-                menu.addItem(all)
+            let inactive = [ModelMonitor.Kind.ollama, .lmstudio, .mlx, .llamaCpp]
+                .filter { k in k.isInstalled && !models.localRuntimes.contains(where: { $0.kind == k }) }
+            if !inactive.isEmpty {
+                let startSub = NSMenuItem(title: "启动其他服务", action: nil, keyEquivalent: "")
+                let sub = NSMenu()
+                for kind in inactive {
+                    let item = NSMenuItem(title: kind.title, action: #selector(startModelService(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = kind.rawValue
+                    sub.addItem(item)
+                }
+                startSub.submenu = sub
+                startSub.indentationLevel = 1
+                menu.addItem(startSub)
             }
-            if rt.kind == .ollama, !rt.loaded.isEmpty {
-                let keep = NSMenuItem(title: "续期保活 30 分钟", action: #selector(keepAliveModels(_:)), keyEquivalent: "")
-                keep.target = self
-                keep.indentationLevel = 2
-                menu.addItem(keep)
-            }
-
-            let open = NSMenuItem(title: "打开 \(rt.kind.title) 控制台", action: #selector(openModelConsole(_:)), keyEquivalent: "")
-            open.target = self
-            open.representedObject = rt.kind.rawValue
-            open.indentationLevel = 2
-            menu.addItem(open)
         }
 
-        let inactive = [ModelMonitor.Kind.ollama, .lmstudio, .mlx, .llamaCpp]
-            .filter { k in k.isInstalled && !models.runtimes.contains(where: { $0.kind == k }) }
-        if !inactive.isEmpty {
-            let startSub = NSMenuItem(title: "启动其他服务", action: nil, keyEquivalent: "")
-            let sub = NSMenu()
-            for kind in inactive {
-                let item = NSMenuItem(title: kind.title, action: #selector(startModelService(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = kind.rawValue
-                sub.addItem(item)
-            }
-            startSub.submenu = sub
-            startSub.indentationLevel = 1
-            menu.addItem(startSub)
-        }
+        buildRemoteSection(menu)
 
         if let notice = models.notice {
             let n = NSMenuItem(title: "· \(notice)", action: nil, keyEquivalent: "")
             n.isEnabled = false
             menu.addItem(n)
         }
+    }
+
+    // MARK: - 远程模型区(局域网内的 Windows / Linux 推理机)
+
+    private func buildRemoteSection(_ menu: NSMenu) {
+        menu.addItem(.separator())
+
+        let header = NSMenuItem(title: "远程模型", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        if models.remoteRuntimes.isEmpty, models.offlineEndpoints.isEmpty {
+            let none = NSMenuItem(title: "未添加远程主机 · 可监测 Windows 上的推理服务", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            none.indentationLevel = 1
+            menu.addItem(none)
+        }
+
+        for rt in models.remoteRuntimes {
+            let endpoint = rt.endpoint
+            let title = NSMenuItem(title: remoteLine(endpoint), action: nil, keyEquivalent: "")
+            title.isEnabled = false
+            title.indentationLevel = 1
+            menu.addItem(title)
+            modelValueItems.append((title, { _ in self.remoteLine(endpoint) }))
+
+            for m in rt.loaded {
+                let item = NSMenuItem(title: remoteModelLine(endpoint, m.name), action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                item.indentationLevel = 2
+                menu.addItem(item)
+                let name = m.name
+                modelValueItems.append((item, { _ in self.remoteModelLine(endpoint, name) }))
+
+                if rt.controllable {
+                    let unload = NSMenuItem(title: "卸载「\(m.name)」(远程)", action: #selector(unloadModel(_:)), keyEquivalent: "")
+                    unload.target = self
+                    unload.representedObject = "remote|\(endpoint)|\(m.name)"
+                    unload.indentationLevel = 3
+                    menu.addItem(unload)
+                }
+            }
+
+            if rt.kind == .ollama, rt.loaded.count > 1 {
+                let all = NSMenuItem(title: "卸载全部(远程)", action: #selector(unloadAllModels(_:)), keyEquivalent: "")
+                all.target = self
+                all.representedObject = endpoint
+                all.indentationLevel = 2
+                menu.addItem(all)
+            }
+            if rt.kind == .ollama, !rt.loaded.isEmpty {
+                let keep = NSMenuItem(title: "续期保活 30 分钟(远程)", action: #selector(keepAliveModels(_:)), keyEquivalent: "")
+                keep.target = self
+                keep.representedObject = endpoint
+                keep.indentationLevel = 2
+                menu.addItem(keep)
+            }
+            if rt.kind == .llamaCpp {
+                let web = NSMenuItem(title: "打开 llama.cpp 网页界面", action: #selector(openRemoteWeb(_:)), keyEquivalent: "")
+                web.target = self
+                web.representedObject = endpoint
+                web.indentationLevel = 2
+                menu.addItem(web)
+            }
+
+            let remove = NSMenuItem(title: "移除 \(endpoint)", action: #selector(removeRemoteHost(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = endpoint
+            remove.indentationLevel = 2
+            menu.addItem(remove)
+        }
+
+        for ep in models.offlineEndpoints {
+            let line = NSMenuItem(title: "\(ep) · 离线", action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            line.indentationLevel = 1
+            menu.addItem(line)
+
+            let remove = NSMenuItem(title: "移除 \(ep)", action: #selector(removeRemoteHost(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = ep
+            remove.indentationLevel = 2
+            menu.addItem(remove)
+        }
+
+        let add = NSMenuItem(title: "添加远程主机…", action: #selector(addRemoteHost(_:)), keyEquivalent: "")
+        add.target = self
+        add.indentationLevel = 1
+        menu.addItem(add)
+
+        if models.scanning {
+            let scan = NSMenuItem(title: "正在扫描局域网…", action: nil, keyEquivalent: "")
+            scan.isEnabled = false
+            scan.indentationLevel = 1
+            menu.addItem(scan)
+        } else {
+            let scan = NSMenuItem(title: "扫描局域网", action: #selector(scanLAN(_:)), keyEquivalent: "")
+            scan.target = self
+            scan.indentationLevel = 1
+            menu.addItem(scan)
+        }
+        for c in models.scanCandidates {
+            let item = NSMenuItem(title: "添加 \(c.endpoint)(\(c.kindTitle))", action: #selector(addScanCandidate(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = c.endpoint
+            item.indentationLevel = 2
+            menu.addItem(item)
+        }
+    }
+
+    /// 远程主机概览行(数值型,就地刷新)。
+    private func remoteLine(_ endpoint: String) -> String {
+        guard let rt = models.remoteRuntimes.first(where: { $0.endpoint == endpoint }) else {
+            return "\(endpoint) · 离线"
+        }
+        var s = "\(endpoint) · \(rt.kind.title)"
+        if let v = rt.version, !v.isEmpty { s += " · v\(v)" }
+        s += " · \(rt.loaded.count) 个已加载"
+        return s
+    }
+
+    /// 远程已加载模型的信息行(数值型,就地刷新)。
+    private func remoteModelLine(_ endpoint: String, _ name: String) -> String {
+        guard let rt = models.remoteRuntimes.first(where: { $0.endpoint == endpoint }),
+              let m = rt.loaded.first(where: { $0.name == name }) else { return "▸ \(name)" }
+        var line = "▸ \(m.name)"
+        if m.vramBytes > 0 { line += " · \(bytesText(m.vramBytes))" }
+        if !m.meta.isEmpty { line += " · \(m.meta)" }
+        line += " · \(remainText(m.expires))"
+        return line
     }
 
     /// 运行时概览行(数值型,就地刷新)。
@@ -394,7 +525,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
-        models.refreshNow()
+        models.refreshNow(forceRemote: true)
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -679,11 +810,14 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     @objc private func unloadModel(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? String else { return }
-        let parts = payload.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2, let kind = ModelMonitor.Kind(rawValue: parts[0]) else { return }
-        let name = parts[1]
+        let parts = payload.components(separatedBy: "|")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.models.unloadModel(kind: kind, name: name)
+            guard let self else { return }
+            if parts.count == 3, parts[0] == "remote" {
+                self.models.unloadRemoteModel(parts[1], name: parts[2])
+            } else if parts.count == 3, parts[0] == "local", let kind = ModelMonitor.Kind(rawValue: parts[1]) {
+                self.models.unloadModel(kind: kind, name: parts[2])
+            }
         }
     }
 
@@ -702,14 +836,16 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     }
 
     @objc private func unloadAllModels(_ sender: NSMenuItem) {
+        let endpoint = sender.representedObject as? String
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.models.unloadAllOllama()
+            self?.models.unloadAllOllama(endpoint: endpoint)
         }
     }
 
     @objc private func keepAliveModels(_ sender: NSMenuItem) {
+        let endpoint = sender.representedObject as? String
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.models.keepAliveOllama("30m")
+            self?.models.keepAliveOllama("30m", endpoint: endpoint)
         }
     }
 
@@ -726,6 +862,57 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
             models.notice = "无法启动 \(kind.title),请确认已安装"
         }
         rebuildMenu()
+    }
+
+    // MARK: - 远程模型动作
+
+    @objc private func addRemoteHost(_ sender: NSMenuItem) {
+        let alert = NSAlert()
+        alert.messageText = "添加远程主机"
+        alert.informativeText = "格式:IP 或主机名[:端口],如 192.168.1.23:11434。\n支持 Ollama(11434)、LM Studio(1234)、llama.cpp(8080)、vLLM(8000)。\nWindows 端需把服务监听改为 0.0.0.0,并在防火墙放行对应端口。"
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        input.placeholderString = "192.168.1.23:11434"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        alert.addButton(withTitle: "添加")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let spec = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spec.isEmpty else { return }
+        if models.addRemoteEndpoint(spec) {
+            models.refreshNow(forceRemote: true)
+        } else {
+            models.notice = "无法解析地址「\(spec)」"
+        }
+        rebuildMenu()
+    }
+
+    @objc private func removeRemoteHost(_ sender: NSMenuItem) {
+        guard let ep = sender.representedObject as? String else { return }
+        models.removeRemoteEndpoint(ep)
+        rebuildMenu()
+    }
+
+    @objc private func scanLAN(_ sender: NSMenuItem) {
+        if models.startScan() {
+            rebuildMenu()
+        }
+    }
+
+    @objc private func addScanCandidate(_ sender: NSMenuItem) {
+        guard let ep = sender.representedObject as? String else { return }
+        _ = models.addRemoteEndpoint(ep)
+        models.clearScanCandidates()
+        models.refreshNow(forceRemote: true)
+        rebuildMenu()
+    }
+
+    @objc private func openRemoteWeb(_ sender: NSMenuItem) {
+        guard let ep = sender.representedObject as? String,
+              let (host, port) = ModelMonitor.Runtime.parseEndpoint(ep) else { return }
+        if let url = URL(string: ModelMonitor.Runtime.httpBase(host: host, port: port)) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: - 键盘音量键(MediaKeyHandling)
