@@ -14,6 +14,7 @@ swiftc -O -swift-version 5 \
   Sources/VolumeManager.swift \
   Sources/SMCLite.swift \
   Sources/FanController.swift \
+  Sources/ModelMonitor.swift \
   Sources/MediaKeyTap.swift \
   Sources/MenuBarController.swift \
   Sources/main.swift \

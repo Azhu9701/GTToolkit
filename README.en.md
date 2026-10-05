@@ -26,6 +26,7 @@ The only path to the monitor's amplifier is its DDC/CI interface (VCP `0x62` vol
 - "Follow system default output" mode: controls the default output directly, or maps it to the same-named display's speakers over DDC when the default output has no volume control (typical DP monitor case)
 - **Take over the keyboard volume keys** (optional, requires Accessibility permission): intercept F1/F2/F3 and step the target volume by 5% — making the Mac's local volume keys actually work on the monitor
 - **Smart fan management** (optional, one admin prompt on first enable): temperature-curve control, manual RPM sliders, overheat protection; fan mode persists across relaunches
+- **Local model runtime monitoring** (Ollama / LM Studio / MLX / llama.cpp): auto-discovers inference servers running on this Mac and shows loaded models, VRAM usage, parameter count/quantization, keep-alive countdown and per-process CPU/memory, plus GPU utilization and unified-memory pressure; Ollama models can be unloaded one-by-one or all at once, or have their keep-alive extended
 - **Automatic DP-audio repair** (optional, one admin prompt to enable): a resident daemon silently probes the default output after every display wake and restarts the audio service automatically if it has wedged
 - **One-click audio repair**: when the monitor wakes from sleep and DP audio wedges (playback fails with `AudioQueueStart failed`, system-wide silence), one menu click restarts the audio service (requires admin authorization)
 - Reacts to display hot-plug and default-output changes; falls back to follow-default when a pinned device disappears
@@ -54,6 +55,31 @@ After the display wakes from sleep, macOS's DP audio driver occasionally wedges 
 - After every display reconfiguration (including sleep/wake), the daemon silently starts a **zero-volume probe stream** on the default output: failure means wedged → it restarts the audio service and re-probes, up to 3 times
 - The probe is inaudible and takes milliseconds; skipped while displays sleep; 45s cooldown prevents loops
 - Clicking the same item again fully uninstalls the daemon
+
+## Local model runtime monitoring
+
+A new "Local models" section in the menu auto-discovers the inference servers running on this Mac and gives you actionable controls without dropping to a terminal.
+
+**Monitored runtimes** (each probed via its local API; requests deliberately bypass the system proxy so they can't be swallowed by a local proxy on 127.0.0.1):
+
+| Runtime | Probe | Shown |
+| --- | --- | --- |
+| Ollama | `11434/api/ps` + `/api/tags` | loaded models, VRAM, params · quantization · context, keep-alive countdown, total installed models |
+| LM Studio | `1234/api/v0/models` (falls back to `/v1/models`) | loaded models, quantization, context length |
+| MLX / oMLX / MTPLX | `/v1/models` on ports like `8088` | models currently served |
+| llama.cpp | `/props` on `8080/8010/8011` | model alias and weight filename |
+
+Each runtime is annotated with its process group's CPU and resident memory; a header line reports whole-machine **GPU utilization** (Apple Silicon `IOAccelerator` Device Utilization), unified-memory usage and memory-pressure level.
+
+**Management actions**:
+
+- **Unload a model**: Ollama and LM Studio support per-model unload. Ollama uses `keep_alive=0` to free VRAM immediately; embedding models (bge, …) reject `generate`, so the unload automatically falls back to `/api/embed`.
+- **Unload all / Extend keep-alive**: Ollama can clear every loaded model at once, or extend keep-alive by 30 minutes to avoid repeated cold starts.
+- **Terminate process**: for runtimes without an unload API (MLX, llama.cpp) the menu offers "Terminate process (free memory)" — SIGTERM first, SIGKILL after a grace period (with confirmation).
+- **Start service**: lists runtimes that are installed but not running, one click to launch (Ollama via the app or `ollama serve`; LM Studio starts the app then `lms server start`; MLX opens the desktop app).
+- **Open console**: jumps to the runtime's management UI or local web console.
+
+Polling runs every 5 seconds; while the menu is open, values update in place and the menu is only rebuilt when the set of runtimes/loaded models changes, so it never interrupts your mouse interaction.
 
 ## Build & Run
 
@@ -104,6 +130,7 @@ Sources/DDCController.swift      # DDC/CI: display discovery, IOAVService I2C, V
 Sources/VolumeManager.swift      # Unified target model: follow-default / pinned audio device / pinned DDC display
 Sources/SMCLite.swift            # SMC low level: key read-write, fan speeds, temperature discovery (shared with helper)
 Sources/FanController.swift      # Smart fan management: temperature curve, modes, helper communication
+Sources/ModelMonitor.swift       # Local model monitoring: runtime discovery, models/VRAM/keep-alive, GPU & memory, unload/start
 Sources/FanHelperMain.swift      # gt-fanctl privileged helper (root): resident daemon, whitelisted commands, wake-probe auto-repair, auto-restore on disconnect
 Sources/MediaKeyTap.swift        # CGEventTap media-key takeover (requires Accessibility)
 Sources/MenuBarController.swift  # Menu bar UI: slider, device list, fan section, status icon, launch-at-login

@@ -6,6 +6,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     private let manager = VolumeManager.shared
     private let fan = FanController.shared
+    private let models = ModelMonitor.shared
     private let mediaKeyTap = MediaKeyTap.shared
 
     private var statusItem: NSStatusItem?
@@ -17,8 +18,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     private var muteItem: NSMenuItem?
     private var fanTempItem: NSMenuItem?
     private var fanRPMItem: NSMenuItem?
-
     private var cachedMuted: Bool?
+    private var lastModelStructure = ""
+    private var modelValueItems: [(NSMenuItem, (ModelMonitor) -> String)] = []
 
     // MARK: - 启动
 
@@ -34,6 +36,9 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
         fan.onUpdate = { [weak self] in self?.refreshFanUI() }
         fan.start()
+
+        models.onUpdate = { [weak self] in self?.refreshModelUI() }
+        models.start()
 
         let menu = NSMenu()
         menu.delegate = self
@@ -106,6 +111,185 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     private func fanRPMLine() -> String {
         guard !fan.fans.isEmpty else { return "未发现风扇" }
         return fan.fans.map { String(format: "风扇%d %.0f RPM", $0.index + 1, $0.current) }.joined(separator: " · ")
+    }
+
+    // MARK: - 本地模型区
+
+    private func refreshModelUI() {
+        guard menuIsOpen else { return }
+        // 结构变化(新增/关闭运行时、加载/卸载模型)才重建菜单;
+        // 数值变化(GPU/CPU/倒计时)就地更新,避免每 5 秒重建打断鼠标交互。
+        if models.structuralSignature != lastModelStructure {
+            rebuildMenu()
+            return
+        }
+        for (item, format) in modelValueItems {
+            let text = format(models)
+            if item.title != text { item.title = text }
+        }
+    }
+
+    private func bytesText(_ bytes: UInt64) -> String {
+        guard bytes > 0 else { return "—" }
+        let gb = Double(bytes) / 1_073_741_824
+        return gb >= 1 ? String(format: "%.1f GB", gb) : String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    }
+
+    private func remainText(_ date: Date?) -> String {
+        guard let date else { return "常驻" }
+        let secs = Int(date.timeIntervalSinceNow)
+        if secs <= 0 { return "即将卸载" }
+        if secs >= 3600 { return String(format: "%d 小时 %d 分", secs / 3600, (secs % 3600) / 60) }
+        if secs >= 60 { return "\(secs / 60) 分 \(secs % 60) 秒" }
+        return "\(secs) 秒"
+    }
+
+    private func buildModelSection(_ menu: NSMenu) {
+        modelValueItems.removeAll()
+        lastModelStructure = models.structuralSignature
+        menu.addItem(.separator())
+
+        let header = NSMenuItem(title: "本地模型", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        let gpu = NSMenuItem(title: gpuLine(), action: nil, keyEquivalent: "")
+        gpu.isEnabled = false
+        gpu.indentationLevel = 1
+        menu.addItem(gpu)
+        modelValueItems.append((gpu, { _ in self.gpuLine() }))
+
+        if models.runtimes.isEmpty {
+            let none = NSMenuItem(title: "未检测到运行中的本地模型服务", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            none.indentationLevel = 1
+            menu.addItem(none)
+
+            let startSub = NSMenuItem(title: "启动服务", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for kind in [ModelMonitor.Kind.ollama, .lmstudio, .llamaCpp, .mlx] {
+                let item = NSMenuItem(title: kind.title, action: #selector(startModelService(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = kind.rawValue
+                sub.addItem(item)
+            }
+            startSub.submenu = sub
+            startSub.indentationLevel = 1
+            menu.addItem(startSub)
+            return
+        }
+
+        for rt in models.runtimes {
+            let title = NSMenuItem(title: runtimeLine(rt.kind), action: nil, keyEquivalent: "")
+            title.isEnabled = false
+            title.indentationLevel = 1
+            menu.addItem(title)
+            let kind = rt.kind
+            modelValueItems.append((title, { _ in self.runtimeLine(kind) }))
+
+            if rt.loaded.isEmpty {
+                let idle = NSMenuItem(title: "已安装 \(rt.installed) 个模型 · 当前未加载",
+                                      action: nil, keyEquivalent: "")
+                idle.isEnabled = false
+                idle.indentationLevel = 2
+                menu.addItem(idle)
+                continue
+            }
+
+            for m in rt.loaded {
+                let item = NSMenuItem(title: modelLine(m.name), action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                item.indentationLevel = 2
+                menu.addItem(item)
+                let name = m.name
+                modelValueItems.append((item, { _ in self.modelLine(name) }))
+
+                if rt.controllable {
+                    let unload = NSMenuItem(title: "卸载「\(m.name)」", action: #selector(unloadModel(_:)), keyEquivalent: "")
+                    unload.target = self
+                    unload.representedObject = "\(rt.kind.rawValue)|\(m.name)"
+                    unload.indentationLevel = 3
+                    menu.addItem(unload)
+                } else {
+                    let stop = NSMenuItem(title: "结束进程(释放内存)", action: #selector(terminateRuntime(_:)), keyEquivalent: "")
+                    stop.target = self
+                    stop.representedObject = rt.kind.rawValue
+                    stop.indentationLevel = 3
+                    menu.addItem(stop)
+                }
+            }
+
+            if rt.kind == .ollama, rt.loaded.count > 1 {
+                let all = NSMenuItem(title: "卸载全部", action: #selector(unloadAllModels(_:)), keyEquivalent: "")
+                all.target = self
+                all.indentationLevel = 2
+                menu.addItem(all)
+            }
+            if rt.kind == .ollama, !rt.loaded.isEmpty {
+                let keep = NSMenuItem(title: "续期保活 30 分钟", action: #selector(keepAliveModels(_:)), keyEquivalent: "")
+                keep.target = self
+                keep.indentationLevel = 2
+                menu.addItem(keep)
+            }
+
+            let open = NSMenuItem(title: "打开 \(rt.kind.title) 控制台", action: #selector(openModelConsole(_:)), keyEquivalent: "")
+            open.target = self
+            open.representedObject = rt.kind.rawValue
+            open.indentationLevel = 2
+            menu.addItem(open)
+        }
+
+        let inactive = [ModelMonitor.Kind.ollama, .lmstudio, .mlx, .llamaCpp]
+            .filter { k in k.isInstalled && !models.runtimes.contains(where: { $0.kind == k }) }
+        if !inactive.isEmpty {
+            let startSub = NSMenuItem(title: "启动其他服务", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for kind in inactive {
+                let item = NSMenuItem(title: kind.title, action: #selector(startModelService(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = kind.rawValue
+                sub.addItem(item)
+            }
+            startSub.submenu = sub
+            startSub.indentationLevel = 1
+            menu.addItem(startSub)
+        }
+
+        if let notice = models.notice {
+            let n = NSMenuItem(title: "· \(notice)", action: nil, keyEquivalent: "")
+            n.isEnabled = false
+            menu.addItem(n)
+        }
+    }
+
+    /// 运行时概览行(数值型,就地刷新)。
+    private func runtimeLine(_ kind: ModelMonitor.Kind) -> String {
+        guard let rt = models.runtimes.first(where: { $0.kind == kind }) else { return kind.title }
+        var s = "\(kind.title) · 端口 \(rt.port)"
+        if let proc = models.procs[kind] { s += " · CPU \(Int(proc.cpu))% · 内存 \(bytesText(proc.mem))" }
+        if let v = rt.version, !v.isEmpty { s += " · v\(v)" }
+        return s
+    }
+
+    /// 单个已加载模型的信息行(数值型,就地刷新)。
+    private func modelLine(_ name: String) -> String {
+        for rt in models.runtimes {
+            guard let m = rt.loaded.first(where: { $0.name == name }) else { continue }
+            var line = "▸ \(m.name)"
+            if m.vramBytes > 0 { line += " · \(bytesText(m.vramBytes))" }
+            if !m.meta.isEmpty { line += " · \(m.meta)" }
+            line += " · \(remainText(m.expires))"
+            return line
+        }
+        return "▸ \(name)"
+    }
+
+
+    private func gpuLine() -> String {
+        let mem = models.memTotal > 0
+            ? String(format: "内存 %.1f/%.0f GB", Double(models.memUsed) / 1_073_741_824, Double(models.memTotal) / 1_073_741_824)
+            : ""
+        return String(format: "GPU %d%% · %@ · 内存压力%@", Int(models.gpuUtil.rounded()), mem, models.memPressure)
     }
 
     private func buildFanSection(_ menu: NSMenu) {
@@ -210,6 +394,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
+        models.refreshNow()
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -282,6 +467,8 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         }
 
         buildFanSection(menu)
+
+        buildModelSection(menu)
 
         menu.addItem(.separator())
 
@@ -486,6 +673,59 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
                .first(where: { $0.identifier?.rawValue == "fanPct\(index)" }) {
             label.stringValue = "\(Int(sender.doubleValue * 100))% · \(rpm)RPM"
         }
+    }
+
+    // MARK: - 本地模型动作
+
+    @objc private func unloadModel(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? String else { return }
+        let parts = payload.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let kind = ModelMonitor.Kind(rawValue: parts[0]) else { return }
+        let name = parts[1]
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.models.unloadModel(kind: kind, name: name)
+        }
+    }
+
+    @objc private func terminateRuntime(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let kind = ModelMonitor.Kind(rawValue: raw) else { return }
+        let alert = NSAlert()
+        alert.messageText = "结束 \(kind.title) 进程?"
+        alert.informativeText = "将向该运行时的所有进程发送终止信号,正在进行的推理会中断。"
+        alert.addButton(withTitle: "结束进程")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.models.terminate(kind)
+        }
+    }
+
+    @objc private func unloadAllModels(_ sender: NSMenuItem) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.models.unloadAllOllama()
+        }
+    }
+
+    @objc private func keepAliveModels(_ sender: NSMenuItem) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.models.keepAliveOllama("30m")
+        }
+    }
+
+    @objc private func openModelConsole(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let rt = models.runtimes.first(where: { $0.kind.rawValue == raw }) else { return }
+        models.openConsole(rt)
+    }
+
+    @objc private func startModelService(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let kind = ModelMonitor.Kind(rawValue: raw) else { return }
+        if !models.startService(kind) {
+            models.notice = "无法启动 \(kind.title),请确认已安装"
+        }
+        rebuildMenu()
     }
 
     // MARK: - 键盘音量键(MediaKeyHandling)
