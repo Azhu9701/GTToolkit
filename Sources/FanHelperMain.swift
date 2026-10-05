@@ -5,7 +5,7 @@ import CoreAudio
 import CoreGraphics
 import AudioToolbox
 
-// gt-fanctl:GT 音量助手的特权助手(root)。
+// gt-fanctl:GT 工具箱的特权助手(root)。
 //
 // 三种模式:
 //   daemon <socket> <uid>   常驻守护(launchd 拉起):白名单风扇命令 + 唤醒后音频假死自动探测修复

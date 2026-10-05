@@ -1,6 +1,6 @@
 import AppKit
 
-// 生成 GT 音量助手的 App 图标:macOS 圆角方块 + 白色扬声器,输出标准 iconset 与 icns。
+// 生成 GT 工具箱的 App 图标:macOS 圆角方块 + 白色扬声器,输出标准 iconset 与 icns。
 // 用法:swiftc tools/make_icon.swift -o /tmp/make_icon -framework AppKit && /tmp/make_icon [输出目录]
 
 let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Assets"

@@ -1,11 +1,11 @@
-# GT 音量助手(GTVolume)
+# GT 工具箱(GTToolkit)
 
 <div align="center">
-  <img src="docs/icon-128.png" width="110" alt="GT 音量助手图标">
+  <img src="docs/icon-128.png" width="110" alt="GT 工具箱图标">
 
   **macOS 菜单栏工具箱:显示器音量 · 智能风扇 · 本地/远程大模型监测**
 
-  [![Release](https://img.shields.io/github/v/release/Azhu9701/GTVolume)](https://github.com/Azhu9701/GTVolume/releases)
+  [![Release](https://img.shields.io/github/v/release/Azhu9701/GTToolkit)](https://github.com/Azhu9701/GTToolkit/releases)
   ![Platform](https://img.shields.io/badge/macOS-13%2B%20·%20Apple%20Silicon-black)
   [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
   ![Build](https://img.shields.io/badge/构建-Swift%20%2B%20CLT-orange)
@@ -13,9 +13,9 @@
 
 简体中文 | [English](README.en.md)
 
-从「给华为 MateView GT 27 显示器补一个音量控制」开始,逐渐长成了菜单栏工具箱:显示器音量直控、智能风扇调速、本地与局域网大模型监测管理、音频假死自愈。纯 Swift + Command Line Tools 构建,无需 Xcode 工程;MIT 许可证。
+GT 工具箱(原名「GT 音量助手 / GTVolume」)从「给华为 MateView GT 27 显示器补一个音量控制」开始,逐渐长成了菜单栏工具箱:显示器音量直控、智能风扇调速、本地与局域网大模型监测管理、音频假死自愈。纯 Swift + Command Line Tools 构建,无需 Xcode 工程;MIT 许可证。
 
-**安装**:到 [Releases](https://github.com/Azhu9701/GTVolume/releases) 下载 `GTVolume-x.x.x-arm64.dmg`,拖入「应用程序」即可;也可从源码构建(见下文)。
+**安装**:到 [Releases](https://github.com/Azhu9701/GTToolkit/releases) 下载 `GTToolkit-x.x.x-arm64.dmg`,拖入「应用程序」即可;也可从源码构建(见下文)。
 
 ![菜单截图](docs/screenshot-menu.png)
 
@@ -139,15 +139,15 @@ macOS 自带的风扇策略偏保守,本 App 通过 SMC 直读温度与转速,�
 ## 构建与运行
 
 ```bash
-./build.sh          # 生成 GTVolume.app
-open GTVolume.app
+./build.sh          # 生成 GTToolkit.app
+open GTToolkit.app
 ```
 
 要求:Xcode Command Line Tools(未安装时先 `xcode-select --install`)。链接了私有框架 CoreDisplay(SDK 内有 tbd 存根,运行时由 dyld 共享缓存解析)。
 
 打包分发 DMG:`./build-dmg.sh`。
 
-建议把 `GTVolume.app` 拖入「应用程序」文件夹后再开启「登录时自动启动」;移动位置后需把该选项关掉再开一次。
+建议把 `GTToolkit.app` 拖入「应用程序」文件夹后再开启「登录时自动启动」;移动位置后需把该选项关掉再开一次。
 
 ## 使用
 

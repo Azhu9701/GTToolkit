@@ -1,9 +1,9 @@
 #!/bin/bash
-# 构建 GT 音量助手 → ./GTVolume.app
+# 构建 GT 工具箱 → ./GTToolkit.app
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP="GTVolume.app"
+APP="GTToolkit.app"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -18,7 +18,7 @@ swiftc -O -swift-version 5 \
   Sources/MediaKeyTap.swift \
   Sources/MenuBarController.swift \
   Sources/main.swift \
-  -o "$APP/Contents/MacOS/GTVolume" \
+  -o "$APP/Contents/MacOS/GTToolkit" \
   -framework AppKit -framework CoreAudio -framework ServiceManagement -framework IOKit -framework Security \
   -F "$(xcrun --show-sdk-path)/System/Library/PrivateFrameworks" -framework CoreDisplay
 

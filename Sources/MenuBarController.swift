@@ -46,7 +46,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         self.menu = menu
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.toolTip = "GT 音量助手"
+        item.button?.toolTip = "GT 工具箱"
         item.menu = menu
         statusItem = item
 
@@ -627,7 +627,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         auto.target = self
         menu.addItem(auto)
 
-        let quit = NSMenuItem(title: "退出 GT 音量助手", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "退出 GT 工具箱", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
     }
 

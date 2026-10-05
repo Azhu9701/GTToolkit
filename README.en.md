@@ -1,11 +1,11 @@
-# GT Volume Assistant (GTVolume)
+# GT Toolkit (GTToolkit)
 
 <div align="center">
-  <img src="docs/icon-128.png" width="110" alt="GT Volume Assistant icon">
+  <img src="docs/icon-128.png" width="110" alt="GT Toolkit icon">
 
   **macOS menu bar toolkit: display volume · smart fan · local & LAN LLM monitoring**
 
-  [![Release](https://img.shields.io/github/v/release/Azhu9701/GTVolume)](https://github.com/Azhu9701/GTVolume/releases)
+  [![Release](https://img.shields.io/github/v/release/Azhu9701/GTToolkit)](https://github.com/Azhu9701/GTToolkit/releases)
   ![Platform](https://img.shields.io/badge/macOS-13%2B%20·%20Apple%20Silicon-black)
   [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
   ![Build](https://img.shields.io/badge/build-Swift%20%2B%20CLT-orange)
@@ -13,9 +13,9 @@
 
 [English](README.en.md) | 简体中文
 
-What started as "a volume controller for the HUAWEI MateView GT 27" grew into a menu bar toolkit: direct display volume control, smart fan management, local & LAN model (LLM) monitoring, and automatic DP-audio repair. Pure Swift, builds with Command Line Tools only (no Xcode project needed); MIT licensed.
+GT Toolkit (formerly "GT Volume Assistant / GTVolume") started as "a volume controller for the HUAWEI MateView GT 27" and grew into a menu bar toolkit: direct display volume control, smart fan management, local & LAN model (LLM) monitoring, and automatic DP-audio repair. Pure Swift, builds with Command Line Tools only (no Xcode project needed); MIT licensed.
 
-**Install**: grab `GTVolume-x.x.x-arm64.dmg` from [Releases](https://github.com/Azhu9701/GTVolume/releases) and drag it into /Applications, or build from source (below).
+**Install**: grab `GTToolkit-x.x.x-arm64.dmg` from [Releases](https://github.com/Azhu9701/GTToolkit/releases) and drag it into /Applications, or build from source (below).
 
 ![Menu screenshot](docs/screenshot-menu.png)
 
@@ -139,22 +139,22 @@ Remote probing shares the same no-proxy request path as local probing and is thr
 ## Build & Run
 
 ```bash
-./build.sh          # produces GTVolume.app
-open GTVolume.app
+./build.sh          # produces GTToolkit.app
+open GTToolkit.app
 ```
 
 Requires Xcode Command Line Tools (`xcode-select --install` if missing). Links the private CoreDisplay framework (SDK ships a tbd stub; resolved from the dyld shared cache at runtime).
 
 For a distributable DMG: `./build-dmg.sh`.
 
-Tip: move `GTVolume.app` into `/Applications` before enabling "Launch at Login"; if you move it later, toggle that option off and on again.
+Tip: move `GTToolkit.app` into `/Applications` before enabling "Launch at Login"; if you move it later, toggle that option off and on again.
 
 ## Usage
 
 - Click the menu bar speaker icon and drag the slider
 - "Display speakers (DDC)" section: check any display to pin it
 - "Output devices" section: Bluetooth headsets, built-in speakers and other CoreAudio devices (volume goes through the system volume property, naturally in sync with the volume keys)
-- "Take over keyboard volume keys": after enabling, the volume keys adjust the current target; the first enable prompts for Accessibility permission (System Settings → Privacy & Security → Accessibility → GTVolume)
+- "Take over keyboard volume keys": after enabling, the volume keys adjust the current target; the first enable prompts for Accessibility permission (System Settings → Privacy & Security → Accessibility → GT Toolkit)
 
 ## How it bridges into macOS volume management
 
