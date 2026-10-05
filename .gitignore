@@ -1,5 +1,5 @@
 # 构建产物
-GTVolume.app
+GTToolkit.app
 build/
 *.o
 .objects/
