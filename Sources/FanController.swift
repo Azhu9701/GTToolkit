@@ -86,7 +86,7 @@ final class FanController: NSObject {
                        pct.count == self.fans.count {
                         self.manualPct = pct
                     }
-                    for f in self.fans { _ = self.send("MODE \(f.index) 1") }
+                    for f in self.fans { self.queueSend("MODE \(f.index) 1") }
                     self.lastTargetRPM = self.fans.map { $0.current }
                     if self.mode == .smart { self.applySmart() }
                 } else {
@@ -104,11 +104,14 @@ final class FanController: NSObject {
         }
     }
 
-    /// 退出 App 时调用:恢复系统自动再断开。
+    /// 退出 App 时调用:恢复系统自动再断开(有 2 秒 socket 超时兜底)。
     func shutdown() {
         if connected {
-            _ = send("ALLAUTO")
-            closeSocket()
+            helperQueue.sync { [weak self] in
+                guard let self else { return }
+                _ = self.send("ALLAUTO")
+                self.closeSocket()
+            }
         }
         smc.closeSMC()
     }
@@ -154,8 +157,11 @@ final class FanController: NSObject {
         switch m {
         case .systemAuto:
             if connected {
-                _ = send("ALLAUTO")
-                closeSocket()
+                helperQueue.async { [weak self] in
+                    guard let self else { return }
+                    _ = self.send("ALLAUTO")
+                    self.closeSocket()
+                }
             }
             mode = .systemAuto
             notice = nil
@@ -169,7 +175,7 @@ final class FanController: NSObject {
             mode = m
             notice = nil
             needsRecovery = false
-            for fan in fans { _ = send("MODE \(fan.index) 1") }
+            for fan in fans { queueSend("MODE \(fan.index) 1") }
             lastTargetRPM = fans.map { $0.current }
             if m == .manual {
                 manualPct = fans.map { min(max(($0.current - $0.min) / max($0.max - $0.min, 1), 0), 1) }
@@ -196,9 +202,8 @@ final class FanController: NSObject {
         manualPct[index] = min(max(pct, 0), 1)
         let fan = fans[index]
         let rpm = fan.min + (fan.max - fan.min) * manualPct[index]
-        if send("RPM \(index) \(Int(rpm.rounded()))") {
-            setLastTarget(index, rpm)
-        }
+        queueSend("RPM \(index) \(Int(rpm.rounded()))")
+        setLastTarget(index, rpm)
         saveState()
     }
 
@@ -209,10 +214,10 @@ final class FanController: NSObject {
             onUpdate?()
             return false
         }
-        _ = send("ALLAUTO")
+        queueSend("ALLAUTO")
+        helperQueue.async { [weak self] in self?.closeSocket() }
         needsRecovery = false
         mode = .systemAuto
-        closeSocket()
         onUpdate?()
         return true
     }
@@ -226,24 +231,21 @@ final class FanController: NSObject {
             onUpdate?()
             return false
         }
-        let ok = send("AUDIO-RESET")
-        notice = ok ? "音频服务已重启,重新播放一次即可" : "修复失败(助手未连接)"
+        queueSend("AUDIO-RESET")
+        notice = "已请求重启音频服务,几秒后重新播放即可"
         onUpdate?()
-        if ok {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-                if self?.notice == "音频服务已重启,重新播放一次即可" {
-                    self?.notice = nil
-                    self?.onUpdate?()
-                }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            if self?.notice == "已请求重启音频服务,几秒后重新播放即可" {
+                self?.notice = nil
+                self?.onUpdate?()
             }
         }
-        return ok
+        return true
     }
 
     // MARK: - 智能温控
 
     private func applySmart() {
-        guard connected else { return }
         guard let preset = FanController.presets.first(where: { $0.key == presetKey }) else { return }
         var frac = (hottestTemp - preset.start) / (preset.full - preset.start)
         frac = min(max(frac, 0), 1)
@@ -257,17 +259,16 @@ final class FanController: NSObject {
             target = min(max(target, last - 800), last + 800)   // 每步限速 800 RPM,避免转速跳变
             target = min(max(target, fan.min), fan.max)
             if abs(target - last) < 40 { continue }             // 迟滞,避免频繁写入
-            if send("RPM \(fan.index) \(Int(target.rounded()))") {
-                setLastTarget(fan.index, target)
-            }
+            queueSend("RPM \(fan.index) \(Int(target.rounded()))")
+            setLastTarget(fan.index, target)
         }
     }
 
     /// 手动/智能模式下的高温兜底:≥95°C 直接全速。
     private func checkEmergency() {
-        guard mode != .systemAuto, connected else { return }
+        guard mode != .systemAuto else { return }
         if hottestTemp >= 95 {
-            for fan in fans { _ = send("RPM \(fan.index) \(Int(fan.max))") }
+            for fan in fans { queueSend("RPM \(fan.index) \(Int(fan.max))") }
             if !emergencyActive {
                 emergencyActive = true
                 notice = "高温保护(\(String(format: "%.0f", hottestTemp))°C):已全速"
@@ -293,6 +294,13 @@ final class FanController: NSObject {
     }
 
     // MARK: - 特权助手通信
+    //
+    // 所有 socket 收发都在 helperQueue(串行)上执行。助手可能被音频探测等
+    // 长操作占住不读数据,阻塞式 send 会把调用线程冻住——曾经把主线程卡死、
+    // 菜单完全无响应的主因。绝不能在主线程直接调 send(_:)。
+
+    private let helperQueue = DispatchQueue(label: "gt.fanctl-client", qos: .userInitiated)
+    private var consecutiveFailures = 0
 
     private func ensureHelper() -> Bool {
         if connected { return true }
@@ -444,10 +452,25 @@ final class FanController: NSObject {
             close(fd)
             return false
         }
+        // 收发超时:助手被长操作占住时命令在 2 秒内失败重试,而不是无限阻塞
+        var tv = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         sockFD = fd
         return true
     }
 
+    /// 把命令投递到后台串行队列执行(需要按序的多条命令各自 queueSend 即可,
+    /// helperQueue 是串行的)。自动重连:断线后下一条命令会尝试重新连接。
+    private func queueSend(_ line: String) {
+        helperQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.connected { self.connected = self.connectSocket() }
+            _ = self.send(line)
+        }
+    }
+
+    /// 同步发送。只能在 helperQueue 上调用(shutdown 走 helperQueue.sync 例外)。
     @discardableResult
     private func send(_ line: String) -> Bool {
         guard sockFD >= 0 else { return false }
@@ -458,28 +481,31 @@ final class FanController: NSObject {
                 Darwin.send(sockFD, p.baseAddress! + sent, bytes.count - sent, 0)
             }
             guard n > 0 else {
-                connectionLost()
+                handleSendFailure()
                 return false
             }
             sent += n
         }
+        consecutiveFailures = 0
         return true
     }
 
-    private func connectionLost() {
+    /// 仅在 helperQueue 上调用。超时/断连先关 socket 逼助手段开时自行恢复自动;
+    /// 连续多次失败才在 UI 上降级,避免助手短暂忙碌导致模式来回跳。
+    private func handleSendFailure() {
         closeSocket()
-        connected = false
-        if mode != .systemAuto {
-            // 助手在连接断开时已自行恢复系统自动,这里同步 UI 状态
+        consecutiveFailures += 1
+        if consecutiveFailures == 3, mode != .systemAuto {
             mode = .systemAuto
-            notice = "助手连接断开,已恢复系统自动"
+            notice = "助手持续无响应,已恢复系统自动"
+            DispatchQueue.main.async { [weak self] in self?.onUpdate?() }
         }
-        onUpdate?()
     }
 
     private func closeSocket() {
         guard sockFD >= 0 else { return }
         close(sockFD)
         sockFD = -1
+        connected = false
     }
 }

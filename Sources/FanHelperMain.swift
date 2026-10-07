@@ -272,8 +272,11 @@ struct GTFanHelper {
             let clamped = min(max(rpm, fanMin[i]), fanMax[i])
             return smc.writeRPM("F\(i)Tg", clamped) ? "OK" : "ERR write"
         case "AUDIO-RESET":
-            // 重启系统音频服务,修复 DP 音频假死(播放报 AudioQueueStart failed)
-            return audioReset() ? "OK" : "ERR reset"
+            // 重启系统音频服务,修复 DP 音频假死(播放报 AudioQueueStart failed)。
+            // 必须异步:coreaudiod 重启可能耗时很长甚至卡住,若在命令循环里同步执行,
+            // 守护会停止读取 socket,把客户端的阻塞式 send 一起拖死。
+            DispatchQueue.global().async { _ = audioReset() }
+            return "OK"
         default:
             return "ERR unknown"
         }
