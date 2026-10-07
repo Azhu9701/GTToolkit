@@ -60,17 +60,18 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         if let muted { cachedMuted = muted }
         updateIcon(volume: vol, muted: muted)
         guard menuIsOpen else { return }
-        let volume = vol ?? manager.volume()
+        // 缓存读数:DDC 不在主线程做同步 I2C
+        let volume = vol ?? manager.cachedVolume()
         slider?.doubleValue = Double(volume ?? 0)
         slider?.isEnabled = manager.hasVolumeControl
         percentLabel?.stringValue = volume.map { percentText($0) } ?? "—"
-        muteItem?.state = (muted ?? manager.isMuted() ?? false) ? .on : .off
+        muteItem?.state = (muted ?? manager.cachedMuted() ?? false) ? .on : .off
     }
 
     private func updateIcon(volume: Float? = nil, muted: Bool? = nil) {
         guard let button = statusItem?.button else { return }
-        let vol = volume ?? manager.volume()
-        let isMuted = muted ?? (cachedMuted ?? manager.isMuted() ?? false)
+        let vol = volume ?? manager.cachedVolume()
+        let isMuted = muted ?? (cachedMuted ?? manager.cachedMuted() ?? false)
 
         let symbolName: String
         if isMuted {
@@ -526,6 +527,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
         models.refreshNow(forceRemote: true)
+        manager.refreshVolumeSnapshot()   // 异步刷 DDC 快照,结果就地更新滑杆/图标
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -534,10 +536,10 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     private func rebuildMenu() {
         guard let menu else { return }
-        manager.refresh()
+        // 纯缓存构建:设备重发现由监听器/轮询在后台完成,点击路径零 I/O
 
-        let volume = manager.volume()
-        let muted = manager.isMuted() ?? false
+        let volume = manager.cachedVolume()
+        let muted = manager.cachedMuted() ?? false
         cachedMuted = muted
 
         menu.removeAllItems()
@@ -705,7 +707,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
     }
 
     @objc private func toggleMute(_ sender: NSMenuItem) {
-        let muted = manager.isMuted() ?? false
+        let muted = manager.cachedMuted() ?? false
         manager.setMuted(!muted) { [weak self] _ in
             self?.refreshVolumeUI(vol: nil, muted: nil)
         }
@@ -716,25 +718,28 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
     @objc private func toggleFollow(_ sender: NSMenuItem) {
         manager.pinned = .followDefault
-        manager.refresh()
-        rebuildMenu()
-        updateIcon()
+        manager.refreshAsync { [weak self] in
+            self?.rebuildMenu()
+            self?.updateIcon()
+        }
     }
 
     @objc private func selectDDCDisplay(_ sender: NSMenuItem) {
         guard let number = sender.representedObject as? NSNumber else { return }
         manager.pinned = .ddcDisplay(CGDirectDisplayID(number.uint32Value))
-        manager.refresh()
-        rebuildMenu()
-        updateIcon()
+        manager.refreshAsync { [weak self] in
+            self?.rebuildMenu()
+            self?.updateIcon()
+        }
     }
 
     @objc private func selectAudioDevice(_ sender: NSMenuItem) {
         guard let number = sender.representedObject as? NSNumber else { return }
         manager.pinned = .audioDevice(AudioDeviceID(number.uint32Value))
-        manager.refresh()
-        rebuildMenu()
-        updateIcon()
+        manager.refreshAsync { [weak self] in
+            self?.rebuildMenu()
+            self?.updateIcon()
+        }
     }
 
     @objc private func toggleMediaKeyTap(_ sender: NSMenuItem) {
@@ -929,7 +934,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
                 self?.refreshVolumeUI(vol: new, muted: nil)
             }
         case .mute:
-            let muted = manager.isMuted() ?? false
+            let muted = manager.cachedMuted() ?? false
             manager.setMuted(!muted) { [weak self] _ in
                 self?.refreshVolumeUI(vol: nil, muted: !muted)
             }
