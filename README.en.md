@@ -31,6 +31,7 @@ GT Toolkit (formerly "GT Volume Assistant / GTVolume") started as "a volume cont
 
 | Version | Highlights |
 | --- | --- |
+| v1.5.0 | ComfyUI VRAM monitoring + one-click free |
 | v1.4.0 | Remote model monitoring (Windows / LAN) |
 | v1.3.0 | Local model runtime monitoring & management |
 | v1.2.x | Automatic DP-audio repair (permanent fix) |
@@ -93,6 +94,7 @@ The "Local models" section in the menu auto-discovers the inference servers runn
 | LM Studio | `1234/api/v0/models` (falls back to `/v1/models`) | loaded models, quantization, context length |
 | MLX / oMLX / MTPLX | `/v1/models` on ports like `8088` | models currently served |
 | llama.cpp | `/props` on `8080/8010/8011` | model alias and weight filename |
+| ComfyUI | `/system_stats` on `8200/8188` | **free VRAM**, checkpoint count, queue length |
 
 Each runtime is annotated with its process group's CPU and resident memory; a header line reports whole-machine **GPU utilization** (Apple Silicon `IOAccelerator` Device Utilization), unified-memory usage and memory-pressure level.
 
@@ -102,6 +104,7 @@ Each runtime is annotated with its process group's CPU and resident memory; a he
 - **Unload all / Extend keep-alive**: Ollama can clear every loaded model at once, or extend keep-alive by 30 minutes to avoid repeated cold starts.
 - **Terminate process**: for runtimes without an unload API (MLX, llama.cpp) the menu offers "Terminate process (free memory)" — SIGTERM first, SIGKILL after a grace period (with confirmation).
 - **Start service**: lists runtimes that are installed but not running, one click to launch (Ollama via the app or `ollama serve`; LM Studio starts the app then `lms server start`; MLX opens the desktop app).
+- **Free VRAM (ComfyUI)**: ComfyUI keeps models resident after a run (measured 20 GB+), which the process RSS never shows; one click calls `/free` to unload them and reclaim the memory — the server keeps running and reloads on the next generation.
 - **Open console**: jumps to the runtime's management UI or local web console.
 
 Polling runs every 5 seconds; while the menu is open, values update in place and the menu is only rebuilt when the set of runtimes/loaded models changes, so it never interrupts your mouse interaction.
@@ -113,10 +116,10 @@ The "Remote models" section watches model servers running on **other machines in
 **Adding hosts**:
 
 - **Add remote host…**: enter `IP[:port]` (e.g. `192.168.1.23:11434`; defaults to Ollama's 11434), hostnames work too
-- **Scan LAN**: concurrently probes the common inference ports (11434 / 1234 / 8080 / 5001 / 8000 / 5000) across the primary interface's /24 subnet (about 3–10 s); discovered services appear in the menu for one-click adding
+- **Scan LAN**: concurrently probes the common inference ports (11434 / 1234 / 8080 / 5001 / 8000 / 5000 / 8188 / 8200) across the primary interface's /24 subnet (about 3–10 s); discovered services appear in the menu for one-click adding
 - Added hosts persist; offline ones show "offline" and recover automatically; "Remove" anytime
 
-**Auto-identification** (probed in order by API fingerprint): Ollama (`/api/version`) → llama.cpp (`/props`) → LM Studio (`/api/v0/models`) → generic OpenAI-compatible servers (`/v1/models`, covers vLLM, KoboldCpp, …).
+**Auto-identification** (probed in order by API fingerprint): Ollama (`/api/version`) → ComfyUI (`/system_stats`) → llama.cpp (`/props`) → LM Studio (`/api/v0/models`) → generic OpenAI-compatible servers (`/v1/models`, covers vLLM, KoboldCpp, …).
 
 **Remote capabilities**:
 
@@ -126,6 +129,7 @@ The "Remote models" section watches model servers running on **other machines in
 | LM Studio | loaded models, quantization, context | monitoring only (no HTTP unload API) |
 | llama.cpp | the loaded gguf model | monitoring only, plus its built-in web UI |
 | OpenAI-compatible | served model list | monitoring only |
+| ComfyUI | free VRAM, checkpoint count, queue | free VRAM (remote) |
 
 **Windows-side configuration** (servers listen on 127.0.0.1 by default):
 

@@ -21,7 +21,7 @@ final class ModelMonitor {
     // MARK: - 数据模型
 
     enum Kind: String, CaseIterable {
-        case ollama, lmstudio, mlx, llamaCpp, openai
+        case ollama, lmstudio, mlx, llamaCpp, openai, comfyui
 
         var title: String {
             switch self {
@@ -30,6 +30,7 @@ final class ModelMonitor {
             case .mlx: return "MLX"
             case .llamaCpp: return "llama.cpp"
             case .openai: return "OpenAI 兼容"
+            case .comfyui: return "ComfyUI"
             }
         }
 
@@ -40,7 +41,9 @@ final class ModelMonitor {
             case .lmstudio: return ["lm studio", "lmstudio", "/lms ", "lm-studio"]
             case .mlx: return ["mlx_lm.server", "mlx-lm", "mlx_lm", "omlx"]
             case .llamaCpp: return ["llama-server"]
-            case .openai: return []
+            // ComfyUI 是 python 进程,按名字匹配会误伤其他脚本;
+            // 它的显存占用来自自身 API,进程 RSS 反而看不出问题(见 probeComfyUI)。
+            case .openai, .comfyui: return []
             }
         }
 
@@ -58,6 +61,8 @@ final class ModelMonitor {
                     || exists("/opt/homebrew/bin/mlx_lm.server") || Self.pathHas("mlx_lm.server")
             case .llamaCpp:
                 return exists("/opt/homebrew/bin/llama-server") || Self.pathHas("llama-server")
+            case .comfyui:
+                return exists("/Applications/Comfy Desktop.app") || exists("~/ComfyUI-Installs") || exists("~/ComfyUI")
             case .openai:
                 return false
             }
@@ -87,6 +92,12 @@ final class ModelMonitor {
         var installed: Int         // 已下载/可见的模型数量
         var controllable: Bool     // 是否支持卸载等管理动作
         var remote: Bool = false   // 局域网内的其他机器(如 Windows 上的 Ollama)
+
+        // ComfyUI 专有:模型常驻显存且不暴露「已加载列表」,这两组数才看得出占用情况
+        var vramFree: UInt64 = 0
+        var vramTotal: UInt64 = 0
+        var queueRunning: Int = 0
+        var queuePending: Int = 0
 
         /// 端点标识 "host:port";IPv6 字面量带方括号。
         var endpoint: String { Self.endpointKey(host: host, port: port) }
@@ -270,6 +281,7 @@ final class ModelMonitor {
                 s += "|\(m.name)@\(remain)"
             }
             if let p = procs[rt.kind] { s += "|cpu\(Int(p.cpu / 5) * 5)" }
+            if rt.kind == .comfyui { s += "|vram\(rt.vramFree / (1 << 30))|q\(rt.queueRunning)/\(rt.queuePending)" }
             parts.append(s)
         }
         return parts.joined(separator: ";")
@@ -357,6 +369,23 @@ final class ModelMonitor {
         return out
     }
 
+    /// 与 getJSON 相同,但用于返回顶层数组的接口(如 ComfyUI 的 /models/*)。
+    private func getJSONArray(_ urlString: String, timeout: TimeInterval = 1.5) -> [Any]? {
+        guard let url = URL(string: urlString) else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.httpMethod = "GET"
+        let sem = DispatchSemaphore(value: 0)
+        var out: [Any]?
+        let session = makeSession(timeout)
+        session.dataTask(with: req) { data, _, _ in
+            if let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [Any] { out = obj }
+            sem.signal()
+        }.resume()
+        _ = sem.wait(timeout: .now() + timeout + 0.5)
+        session.invalidateAndCancel()
+        return out
+    }
+
     @discardableResult
     private func postJSON(_ urlString: String, _ body: [String: Any], timeout: TimeInterval = 4) -> Bool {
         guard let url = URL(string: urlString) else { return false }
@@ -390,6 +419,9 @@ final class ModelMonitor {
         }
         for p in [8088, 8080, 8000] where !usedPorts.contains(p) {
             if let r = probeMLX(port: p) { out.append(r); usedPorts.insert(p); break }
+        }
+        for p in [8200, 8188] where !usedPorts.contains(p) {   // 8200 = Comfy Desktop,8188 = ComfyUI 默认
+            if let r = probeComfyUI(port: p) { out.append(r); usedPorts.insert(p); break }
         }
         return out
     }
@@ -473,6 +505,28 @@ final class ModelMonitor {
                        loaded: loaded, installed: arr.count, controllable: false)
     }
 
+    /// ComfyUI(含 Comfy Desktop)。它不暴露「已加载模型列表」,但 /system_stats 给出
+    /// 显存可用量——这正是排查「画完图后 20GB 显存一直被占着」最需要的数字。
+    private func probeComfyUI(host: String = "127.0.0.1", port: Int) -> Runtime? {
+        let base = Runtime.httpBase(host: host, port: port)
+        guard let d = getJSON("\(base)/system_stats", timeout: 2.0),
+              let sys = d["system"] as? [String: Any],
+              let version = sys["comfyui_version"] as? String else { return nil }
+
+        var rt = Runtime(kind: .comfyui, host: host, port: port, version: version,
+                         loaded: [], installed: 0, controllable: true)
+        if let devices = d["devices"] as? [[String: Any]], let dev = devices.first {
+            rt.vramFree = (dev["vram_free"] as? NSNumber)?.uint64Value ?? 0
+            rt.vramTotal = (dev["vram_total"] as? NSNumber)?.uint64Value ?? 0
+        }
+        if let q = getJSON("\(base)/queue") {
+            rt.queueRunning = (q["queue_running"] as? [Any])?.count ?? 0
+            rt.queuePending = (q["queue_pending"] as? [Any])?.count ?? 0
+        }
+        rt.installed = getJSONArray("\(base)/models/checkpoints")?.count ?? 0
+        return rt
+    }
+
     private func probeMLX(port: Int) -> Runtime? {
         guard let d = getJSON("http://127.0.0.1:\(port)/v1/models"),
               let arr = d["data"] as? [[String: Any]] else { return nil }
@@ -512,6 +566,10 @@ final class ModelMonitor {
         if let rt = probeOllama(host: host, port: port) {
             var r = rt
             r.remote = true
+            return r
+        }
+        if var r = probeComfyUI(host: host, port: port) {
+            r.remote = true   // /free 走 HTTP,远程照样能释放显存
             return r
         }
         if let rt = probeLlamaCpp(host: host, port: port) {
@@ -607,6 +665,24 @@ final class ModelMonitor {
         return n
     }
 
+    /// 让 ComfyUI 卸载已加载的模型并释放显存(等价于面板上的「释放显存」)。
+    /// 下次生成会自动重新加载,代价只是第一次稍慢。
+    @discardableResult
+    func freeComfyUIMemory(endpoint: String? = nil) -> Bool {
+        let target = runtimes.first {
+            $0.kind == .comfyui && (endpoint == nil ? !$0.remote : $0.endpoint == endpoint)
+        }
+        guard let rt = target else { return false }
+        let ok = postJSON("\(Runtime.httpBase(host: rt.host, port: rt.port))/free",
+                          ["unload_models": true, "free_memory": true], timeout: 10)
+        notice = ok
+            ? (rt.remote ? "已请求 \(rt.endpoint) 释放显存" : "已请求 ComfyUI 释放显存")
+            : "释放失败:ComfyUI 未响应"
+        remoteDirty = true
+        scheduleRefresh()
+        return ok
+    }
+
     /// 启动运行时服务(Ollama / LM Studio / MLX 桌面端)。llama.cpp 需自行带模型启动。
     @discardableResult
     func startService(_ kind: Kind) -> Bool {
@@ -646,6 +722,12 @@ final class ModelMonitor {
             }
         case .llamaCpp:
             path = nil; args = []
+        case .comfyui:
+            if FileManager.default.fileExists(atPath: "/Applications/Comfy Desktop.app") {
+                path = "/usr/bin/open"; args = ["-a", "Comfy Desktop"]
+            } else {
+                path = nil; args = []
+            }
         case .openai:
             return false   // 通用 OpenAI 兼容服务没有本机可启动的固定入口
         }
@@ -698,7 +780,7 @@ final class ModelMonitor {
                     return
                 }
                 if let u = URL(string: Runtime.httpBase(host: rt.host, port: rt.port)) { NSWorkspace.shared.open(u) }
-            case .mlx, .llamaCpp, .openai:
+            case .mlx, .llamaCpp, .openai, .comfyui:
                 if let u = URL(string: Runtime.httpBase(host: rt.host, port: rt.port)) { NSWorkspace.shared.open(u) }
             case .ollama:
                 if !rt.remote, FileManager.default.fileExists(atPath: "/Applications/Ollama.app") {
@@ -728,8 +810,8 @@ final class ModelMonitor {
             if ok { notice = "已卸载 \(name)" }
             scheduleRefresh()
             return ok
-        case .mlx, .llamaCpp, .openai:
-            return false
+        case .mlx, .llamaCpp, .openai, .comfyui:
+            return false   // ComfyUI 无按模型卸载接口,用 freeComfyUIMemory 一次性释放
         }
     }
 
@@ -792,8 +874,8 @@ final class ModelMonitor {
         let kindTitle: String
     }
 
-    /// 扫描的常见推理端口:Ollama / LM Studio / llama.cpp / KoboldCpp / vLLM / text-generation-webui
-    static let scanPorts = [11434, 1234, 8080, 5001, 8000, 5000]
+    /// 扫描的常见推理端口:Ollama / LM Studio / llama.cpp / KoboldCpp / vLLM / text-generation-webui / ComfyUI
+    static let scanPorts = [11434, 1234, 8080, 5001, 8000, 5000, 8188, 8200]
 
     private(set) var scanning = false
     private(set) var scanCandidates: [ScanCandidate] = []

@@ -168,7 +168,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
 
             let startSub = NSMenuItem(title: "启动服务", action: nil, keyEquivalent: "")
             let sub = NSMenu()
-            for kind in [ModelMonitor.Kind.ollama, .lmstudio, .llamaCpp, .mlx] {
+            for kind in [ModelMonitor.Kind.ollama, .lmstudio, .llamaCpp, .mlx, .comfyui] {
                 let item = NSMenuItem(title: kind.title, action: #selector(startModelService(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = kind.rawValue
@@ -186,49 +186,61 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
                 let kind = rt.kind
                 modelValueItems.append((title, { _ in self.runtimeLine(kind) }))
 
-                if rt.loaded.isEmpty {
+                if rt.kind == .comfyui {
+                    // ComfyUI 没有「已加载模型」列表,改为展示显存/模型数/队列
+                    let detail = NSMenuItem(title: comfyDetailText(rt), action: nil, keyEquivalent: "")
+                    detail.isEnabled = false
+                    detail.indentationLevel = 2
+                    menu.addItem(detail)
+                    modelValueItems.append((detail, { _ in self.comfyDetailLine() }))
+
+                    let free = NSMenuItem(title: "释放显存(卸载已加载模型)", action: #selector(freeComfyMemory(_:)), keyEquivalent: "")
+                    free.target = self
+                    free.indentationLevel = 2
+                    menu.addItem(free)
+                } else if rt.loaded.isEmpty {
                     let idle = NSMenuItem(title: "已安装 \(rt.installed) 个模型 · 当前未加载",
                                           action: nil, keyEquivalent: "")
                     idle.isEnabled = false
                     idle.indentationLevel = 2
                     menu.addItem(idle)
                     continue
-                }
+                } else {
+                    for m in rt.loaded {
+                        let item = NSMenuItem(title: modelLine(m.name), action: nil, keyEquivalent: "")
+                        item.isEnabled = false
+                        item.indentationLevel = 2
+                        menu.addItem(item)
+                        let name = m.name
+                        modelValueItems.append((item, { _ in self.modelLine(name) }))
 
-                for m in rt.loaded {
-                    let item = NSMenuItem(title: modelLine(m.name), action: nil, keyEquivalent: "")
-                    item.isEnabled = false
-                    item.indentationLevel = 2
-                    menu.addItem(item)
-                    let name = m.name
-                    modelValueItems.append((item, { _ in self.modelLine(name) }))
-
-                    if rt.controllable {
-                        let unload = NSMenuItem(title: "卸载「\(m.name)」", action: #selector(unloadModel(_:)), keyEquivalent: "")
-                        unload.target = self
-                        unload.representedObject = "local|\(rt.kind.rawValue)|\(m.name)"
-                        unload.indentationLevel = 3
-                        menu.addItem(unload)
-                    } else {
-                        let stop = NSMenuItem(title: "结束进程(释放内存)", action: #selector(terminateRuntime(_:)), keyEquivalent: "")
-                        stop.target = self
-                        stop.representedObject = rt.kind.rawValue
-                        stop.indentationLevel = 3
-                        menu.addItem(stop)
+                        if rt.controllable {
+                            let unload = NSMenuItem(title: "卸载「\(m.name)」", action: #selector(unloadModel(_:)), keyEquivalent: "")
+                            unload.target = self
+                            unload.representedObject = "local|\(rt.kind.rawValue)|\(m.name)"
+                            unload.indentationLevel = 3
+                            menu.addItem(unload)
+                        } else {
+                            let stop = NSMenuItem(title: "结束进程(释放内存)", action: #selector(terminateRuntime(_:)), keyEquivalent: "")
+                            stop.target = self
+                            stop.representedObject = rt.kind.rawValue
+                            stop.indentationLevel = 3
+                            menu.addItem(stop)
+                        }
                     }
-                }
 
-                if rt.kind == .ollama, rt.loaded.count > 1 {
-                    let all = NSMenuItem(title: "卸载全部", action: #selector(unloadAllModels(_:)), keyEquivalent: "")
-                    all.target = self
-                    all.indentationLevel = 2
-                    menu.addItem(all)
-                }
-                if rt.kind == .ollama, !rt.loaded.isEmpty {
-                    let keep = NSMenuItem(title: "续期保活 30 分钟", action: #selector(keepAliveModels(_:)), keyEquivalent: "")
-                    keep.target = self
-                    keep.indentationLevel = 2
-                    menu.addItem(keep)
+                    if rt.kind == .ollama, rt.loaded.count > 1 {
+                        let all = NSMenuItem(title: "卸载全部", action: #selector(unloadAllModels(_:)), keyEquivalent: "")
+                        all.target = self
+                        all.indentationLevel = 2
+                        menu.addItem(all)
+                    }
+                    if rt.kind == .ollama, !rt.loaded.isEmpty {
+                        let keep = NSMenuItem(title: "续期保活 30 分钟", action: #selector(keepAliveModels(_:)), keyEquivalent: "")
+                        keep.target = self
+                        keep.indentationLevel = 2
+                        menu.addItem(keep)
+                    }
                 }
 
                 let open = NSMenuItem(title: "打开 \(rt.kind.title) 控制台", action: #selector(openModelConsole(_:)), keyEquivalent: "")
@@ -238,7 +250,7 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
                 menu.addItem(open)
             }
 
-            let inactive = [ModelMonitor.Kind.ollama, .lmstudio, .mlx, .llamaCpp]
+            let inactive = [ModelMonitor.Kind.ollama, .lmstudio, .mlx, .llamaCpp, .comfyui]
                 .filter { k in k.isInstalled && !models.localRuntimes.contains(where: { $0.kind == k }) }
             if !inactive.isEmpty {
                 let startSub = NSMenuItem(title: "启动其他服务", action: nil, keyEquivalent: "")
@@ -287,6 +299,20 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
             title.indentationLevel = 1
             menu.addItem(title)
             modelValueItems.append((title, { _ in self.remoteLine(endpoint) }))
+
+            if rt.kind == .comfyui {
+                let detail = NSMenuItem(title: comfyDetailText(rt), action: nil, keyEquivalent: "")
+                detail.isEnabled = false
+                detail.indentationLevel = 2
+                menu.addItem(detail)
+                modelValueItems.append((detail, { _ in self.remoteComfyDetailLine(endpoint) }))
+
+                let free = NSMenuItem(title: "释放显存(远程)", action: #selector(freeComfyMemory(_:)), keyEquivalent: "")
+                free.target = self
+                free.representedObject = endpoint
+                free.indentationLevel = 2
+                menu.addItem(free)
+            }
 
             for m in rt.loaded {
                 let item = NSMenuItem(title: remoteModelLine(endpoint, m.name), action: nil, keyEquivalent: "")
@@ -379,8 +405,17 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         }
         var s = "\(endpoint) · \(rt.kind.title)"
         if let v = rt.version, !v.isEmpty { s += " · v\(v)" }
-        s += " · \(rt.loaded.count) 个已加载"
+        if rt.kind == .comfyui {
+            if rt.vramTotal > 0 { s += " · 显存 \(bytesText(rt.vramFree))/\(bytesText(rt.vramTotal)) 可用" }
+        } else {
+            s += " · \(rt.loaded.count) 个已加载"
+        }
         return s
+    }
+
+    private func remoteComfyDetailLine(_ endpoint: String) -> String {
+        guard let rt = models.remoteRuntimes.first(where: { $0.endpoint == endpoint }) else { return "—" }
+        return comfyDetailText(rt)
     }
 
     /// 远程已加载模型的信息行(数值型,就地刷新)。
@@ -392,6 +427,26 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         if !m.meta.isEmpty { line += " · \(m.meta)" }
         line += " · \(remainText(m.expires))"
         return line
+    }
+
+    /// ComfyUI 详情行:显存可用量 / 可用模型数 / 队列状态(数值型,就地刷新)。
+    private func comfyDetailLine() -> String {
+        guard let rt = models.runtimes.first(where: { $0.kind == .comfyui && !$0.remote }) else { return "—" }
+        return comfyDetailText(rt)
+    }
+
+    private func comfyDetailText(_ rt: ModelMonitor.Runtime) -> String {
+        var parts: [String] = []
+        if rt.vramTotal > 0 {
+            parts.append("显存 \(bytesText(rt.vramFree))/\(bytesText(rt.vramTotal)) 可用")
+        }
+        parts.append(rt.installed > 0 ? "\(rt.installed) 个 checkpoint" : "无可用模型")
+        if rt.queueRunning > 0 || rt.queuePending > 0 {
+            parts.append("队列 \(rt.queueRunning) 运行 / \(rt.queuePending) 等待")
+        } else {
+            parts.append("队列空闲")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// 运行时概览行(数值型,就地刷新)。
@@ -910,6 +965,14 @@ final class MenuBarController: NSObject, NSMenuDelegate, MediaKeyHandling {
         models.clearScanCandidates()
         models.refreshNow(forceRemote: true)
         rebuildMenu()
+    }
+
+    /// 让 ComfyUI 卸载已加载模型、释放显存(本地按 kind 定位,远程按端点)。
+    @objc private func freeComfyMemory(_ sender: NSMenuItem) {
+        let endpoint = sender.representedObject as? String
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.models.freeComfyUIMemory(endpoint: endpoint)
+        }
     }
 
     @objc private func openRemoteWeb(_ sender: NSMenuItem) {
